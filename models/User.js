@@ -30,35 +30,63 @@ const userSchema = new mongoose.Schema({
   // Apartment Information
   apartmentCode: {
     type: String,
-    required: [true, 'Apartment code is required'],
-    uppercase: true
+    required: function() {
+      // Only required for non-admin roles
+      return this.role && this.role !== 'admin';
+    },
+    uppercase: true,
+    default: undefined
   },
   wing: {
     type: String,
-    required: [true, 'Wing/Building is required'],
+    required: function() {
+      return this.role === 'resident';
+    },
     uppercase: true
   },
   flatNumber: {
     type: String,
-    required: [true, 'Flat number is required'],
+    required: function() {
+      return this.role === 'resident';
+    },
+    uppercase: true
+  },
+  flatCode: {
+    type: String,
+    required: function() {
+      return this.role === 'resident';
+    },
     uppercase: true
   },
   floorNumber: {
     type: Number,
-    required: [true, 'Floor number is required'],
+    required: function() {
+      return this.role === 'resident';
+    },
     min: [0, 'Floor number cannot be negative']
   },
   flatType: {
     type: String,
     enum: ['1BHK', '2BHK', '3BHK', '4BHK', 'Duplex', 'Penthouse'],
-    required: [true, 'Flat type is required']
+    required: function() {
+      return this.role === 'resident';
+    }
+  },
+  // Timestamps for resident registration and updates
+  registeredAt: {
+    type: Date,
+    default: Date.now
+  },
+  lastUpdatedAt: {
+    type: Date,
+    default: Date.now
   },
 
   // Account Information
   password: {
     type: String,
     required: [true, 'Password is required'],
-    minlength: [8, 'Password must be at least 8 characters'],
+    // Removed minlength validation - allow any password length
     select: false
   },
   role: {
@@ -89,6 +117,12 @@ const userSchema = new mongoose.Schema({
     push: { type: Boolean, default: true },
     sms: { type: Boolean, default: true },
     email: { type: Boolean, default: false }
+  },
+  
+  // Firebase Cloud Messaging Token
+  fcmToken: {
+    type: String,
+    default: null
   }
 
 }, {
@@ -103,8 +137,13 @@ userSchema.virtual('fullAddress').get(function() {
 });
 
 // Index for efficient queries
-userSchema.index({ apartmentCode: 1, wing: 1, flatNumber: 1 }, { unique: true });
+// Unique index only for residents (wing + flat combination)
+userSchema.index({ apartmentCode: 1, wing: 1, flatNumber: 1 }, { 
+  unique: true, 
+  partialFilterExpression: { role: 'resident' }
+});
 userSchema.index({ status: 1, role: 1 });
+userSchema.index({ apartmentCode: 1, role: 1 });
 
 // Pre-save middleware for password hashing
 userSchema.pre('save', async function(next) {
