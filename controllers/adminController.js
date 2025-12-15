@@ -5,14 +5,81 @@ const Notice = require('../models/Notice');
 const Apartment = require('../models/Apartment');
 const { emitToUser, emitToRoom } = require('../services/socketService');
 
+// @desc    Get all buildings for admin
+// @route   GET /api/admin/buildings
+// @access  Private (Admin)
+const getAllBuildings = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+    
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admin not found'
+      });
+    }
+
+    // Get all buildings created by this admin
+    const buildings = await Apartment.find({ createdBy: adminId, isActive: true })
+      .select('name code address buildingCategory buildingType configuration.totalFloors configuration.flatsPerFloor createdAt')
+      .sort({ createdAt: -1 });
+
+    // Get statistics for each building
+    const buildingsWithStats = await Promise.all(
+      buildings.map(async (building) => {
+        const totalFlats = building.configuration.totalFloors * building.configuration.flatsPerFloor;
+        const occupiedCount = await User.countDocuments({
+          apartmentCode: building.code,
+          role: 'resident',
+          status: 'active'
+        });
+        const vacantCount = totalFlats - occupiedCount;
+        const occupancyRate = totalFlats > 0 ? ((occupiedCount / totalFlats) * 100).toFixed(2) : 0;
+
+        return {
+          id: building._id,
+          name: building.name,
+          code: building.code,
+          buildingCategory: building.buildingCategory,
+          buildingType: building.buildingType,
+          address: building.address,
+          totalFloors: building.configuration.totalFloors,
+          flatsPerFloor: building.configuration.flatsPerFloor,
+          totalFlats,
+          occupiedFlats: occupiedCount,
+          vacantFlats: vacantCount,
+          occupancyRate: parseFloat(occupancyRate),
+          createdAt: building.createdAt
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        buildings: buildingsWithStats,
+        totalBuildings: buildingsWithStats.length
+      }
+    });
+  } catch (error) {
+    console.error('Get all buildings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching buildings'
+    });
+  }
+};
+
 // @desc    Get admin dashboard statistics
 // @route   GET /api/admin/dashboard
 // @access  Private (Admin)
 const getAdminDashboard = async (req, res) => {
   try {
     const adminId = req.user.id;
+    const { buildingCode } = req.query; // Get building code from query params
 
-    // Get admin's apartment code
+    // Get admin
     const admin = await User.findById(adminId);
     if (!admin) {
       return res.status(404).json({
@@ -21,7 +88,49 @@ const getAdminDashboard = async (req, res) => {
       });
     }
 
-    const apartmentCode = admin.apartmentCode;
+    // If buildingCode is provided, use it; otherwise get first building
+    let apartmentCode = buildingCode;
+    if (!apartmentCode) {
+      // Get first building created by admin
+      const firstBuilding = await Apartment.findOne({ createdBy: adminId, isActive: true })
+        .select('code')
+        .sort({ createdAt: 1 });
+      if (firstBuilding) {
+        apartmentCode = firstBuilding.code;
+      } else {
+        return res.status(200).json({
+          success: true,
+          data: {
+            dashboard: {
+              pendingApprovals: 0,
+              totalComplaints: 0,
+              activeComplaints: 0,
+              resolvedComplaints: 0,
+              staffPerformance: [],
+              recentActivities: [],
+              building: {
+                totalFlats: 0,
+                occupiedFlats: 0,
+                vacantFlats: 0,
+                occupancyRate: 0
+              },
+              residents: { total: 0, active: 0 },
+              staff: { total: 0, active: 0 }
+            },
+            buildings: []
+          }
+        });
+      }
+    }
+
+    // Verify building belongs to admin
+    const building = await Apartment.findOne({ code: apartmentCode, createdBy: adminId, isActive: true });
+    if (!building) {
+      return res.status(403).json({
+        success: false,
+        message: 'Building not found or access denied'
+      });
+    }
 
     // Get pending user approvals
     const pendingUsers = await User.countDocuments({
@@ -91,22 +200,77 @@ const getAdminDashboard = async (req, res) => {
       .limit(10)
       .then(complaints => complaints.filter(comp => comp.createdBy)); // Filter by apartment
 
+    // Get building details for comprehensive statistics
+    // Note: building is already fetched above at line 127
+    let buildingStats = {
+      totalFlats: 0,
+      occupiedFlats: 0,
+      vacantFlats: 0,
+      occupancyRate: 0
+    };
+
+    if (building) {
+      const totalFlats = building.configuration.totalFloors * building.configuration.flatsPerFloor;
+      const occupiedCount = await User.countDocuments({
+        apartmentCode,
+        role: 'resident',
+        status: 'active'
+      });
+      const vacantCount = totalFlats - occupiedCount;
+      const occupancyRate = totalFlats > 0 ? ((occupiedCount / totalFlats) * 100).toFixed(2) : 0;
+
+      buildingStats = {
+        totalFlats,
+        occupiedFlats: occupiedCount,
+        vacantFlats: vacantCount,
+        occupancyRate: parseFloat(occupancyRate),
+        totalFloors: building.configuration.totalFloors,
+        flatsPerFloor: building.configuration.flatsPerFloor
+      };
+    }
+
+    // Get total residents and staff
+    const totalResidents = await User.countDocuments({
+      apartmentCode,
+      role: 'resident',
+      status: 'active'
+    });
+
+    const totalStaff = await User.countDocuments({
+      apartmentCode,
+      role: 'staff',
+      status: 'active'
+    });
+
     // Transform complaint stats
     const stats = complaintStats.reduce((acc, curr) => {
       acc[curr._id] = curr.count;
       return acc;
     }, {});
 
+    const totalComplaints = Object.values(stats).reduce((a, b) => a + b, 0);
+    const activeComplaints = (stats.Open || 0) + (stats.Assigned || 0) + (stats['In Progress'] || 0);
+    const resolvedComplaints = (stats.Resolved || 0) + (stats.Closed || 0);
+
     res.status(200).json({
       success: true,
       data: {
         dashboard: {
           pendingApprovals: pendingUsers,
-          totalComplaints: Object.values(stats).reduce((a, b) => a + b, 0),
-          activeComplaints: stats.Open + stats.Assigned + stats['In Progress'] || 0,
-          resolvedComplaints: stats.Resolved + stats.Closed || 0,
+          totalComplaints,
+          activeComplaints,
+          resolvedComplaints,
           staffPerformance,
-          recentActivities: recentComplaints
+          recentActivities: recentComplaints,
+          building: buildingStats,
+          residents: {
+            total: totalResidents,
+            active: totalResidents
+          },
+          staff: {
+            total: totalStaff,
+            active: totalStaff
+          }
         }
       }
     });
@@ -137,7 +301,7 @@ const getPendingApprovals = async (req, res) => {
     }
 
     const pendingUsers = await User.find({
-      apartmentCode: admin.apartmentCode,
+      apartmentCode: apartmentCode,
       status: 'pending',
       role: 'resident'
     }).select('-password');
@@ -448,3 +612,864 @@ const getAllStaff = async (req, res) => {
       });
     }
   };
+
+// @desc    Create building/apartment (for admin after login)
+// @route   POST /api/admin/buildings
+// @access  Private (Admin)
+const createBuilding = async (req, res) => {
+  try {
+    console.log('🏢 [ADMIN] Create building request received');
+    console.log('🏢 [ADMIN] Request body:', JSON.stringify(req.body, null, 2));
+    
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+    
+    if (!admin) {
+      console.log('❌ [ADMIN] Admin not found');
+      return res.status(404).json({
+        success: false,
+        message: 'Admin not found'
+      });
+    }
+
+    // Allow multiple buildings per admin - no restriction
+
+    const {
+      name,
+      code,
+      address,
+      contact,
+      settings,
+      totalFloors,
+      flatsPerFloor,
+      // New comprehensive fields
+      buildingCategory,
+      buildingType,
+      structuralDetails,
+      safetyCompliance,
+      utilities,
+      parking,
+      amenities
+    } = req.body;
+
+    // Validate required fields
+    if (!name || !code || !address) {
+      console.log('❌ [ADMIN] Missing required fields');
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: name, code, and address are required'
+      });
+    }
+
+    // Validate floors and flats configuration
+    const numFloors = parseInt(totalFloors) || 5;
+    const numFlatsPerFloor = parseInt(flatsPerFloor) || 4;
+    
+    if (numFloors < 1 || numFloors > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Total floors must be between 1 and 100'
+      });
+    }
+    
+    if (numFlatsPerFloor < 1 || numFlatsPerFloor > 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Flats per floor must be between 1 and 50'
+      });
+    }
+
+    // Check if building code already exists
+    const existingBuilding = await Apartment.findByCode(code);
+    if (existingBuilding) {
+      console.log('❌ [ADMIN] Building code already exists:', code);
+      return res.status(409).json({
+        success: false,
+        message: 'Building with this code already exists'
+      });
+    }
+
+    console.log('📋 [ADMIN] Creating building dynamically...');
+    console.log('📋 [ADMIN] Building configuration:');
+    console.log(`  - Total Floors: ${numFloors}`);
+    console.log(`  - Flats per Floor: ${numFlatsPerFloor}`);
+    console.log(`  - Total Flats: ${numFloors * numFlatsPerFloor}`);
+    
+    // Generate building code prefix from building name
+    const buildingPrefix = name
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .substring(0, 6)
+      .toUpperCase();
+    
+    // Create floors with flats dynamically
+    const floors = [];
+    const flatTypes = ['1BHK', '2BHK', '3BHK', '4BHK'];
+    
+    for (let floorNum = 1; floorNum <= numFloors; floorNum++) {
+      const flats = [];
+      for (let flatNum = 1; flatNum <= numFlatsPerFloor; flatNum++) {
+        // Format: Floor 1 -> 101, 102, 103, 104; Floor 2 -> 201, 202, etc.
+        const flatNumber = `${floorNum}${String(flatNum).padStart(2, '0')}`;
+        const flatType = flatTypes[(flatNum - 1) % 4]; // Rotate flat types
+        
+        // Generate FlatCode: BuildingPrefix-FloorNumber-FlatNumber
+        // Example: SUNSHI-1-01, SUNSHI-2-03
+        const flatCode = `${buildingPrefix}-${floorNum}-${String(flatNum).padStart(2, '0')}`;
+        
+        flats.push({
+          flatNumber: flatNumber,
+          flatCode: flatCode,
+          flatType: flatType,
+          isOccupied: false,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        
+        console.log(`  ✓ Floor ${floorNum}, Flat ${flatNumber} (${flatCode}) - ${flatType}`);
+      }
+      floors.push({
+        floorNumber: floorNum,
+        flats: flats
+      });
+    }
+    
+    console.log(`✅ [ADMIN] Created ${floors.length} floors with ${floors[0].flats.length} flats each`);
+    console.log(`✅ [ADMIN] Total flats created: ${floors.length * floors[0].flats.length}`);
+    
+    // Calculate building age if completion date is provided
+    let buildingAge = null;
+    if (structuralDetails?.constructionCompletionDate) {
+      const completionDate = new Date(structuralDetails.constructionCompletionDate);
+      const today = new Date();
+      buildingAge = Math.floor((today - completionDate) / (1000 * 60 * 60 * 24 * 365));
+    }
+
+    // Create building with comprehensive fields
+    const building = await Apartment.create({
+      name,
+      code: code.toUpperCase(),
+      buildingCategory: buildingCategory || 'Residential',
+      buildingType: buildingType || 'Apartment',
+      address,
+      contact: contact || {},
+      structuralDetails: structuralDetails ? {
+        ...structuralDetails,
+        buildingAge: buildingAge
+      } : {},
+      safetyCompliance: safetyCompliance || {},
+      utilities: utilities || {},
+      parking: parking || {},
+      amenities: amenities || [],
+      configuration: {
+        totalFloors: numFloors,
+        flatsPerFloor: numFlatsPerFloor,
+        floors: floors
+      },
+      settings: settings || {
+        maintenanceRate: 0,
+        lateFeePercentage: 2,
+        gracePeriod: 15
+      },
+      createdBy: adminId,
+      isActive: true
+    });
+
+    console.log(`✅ [ADMIN] Building created: ${building._id}`);
+
+    // Activate admin account if not already active
+    if (admin.status !== 'active') {
+      admin.status = 'active';
+      await admin.save();
+      console.log(`✅ [ADMIN] Admin account activated`);
+    }
+
+    console.log('📡 [ADMIN] Emitting real-time events for building creation');
+    
+    // Emit real-time event to admin
+    emitToUser(adminId.toString(), 'building_created', {
+      message: 'Building created successfully',
+      building: {
+        id: building._id,
+        name: building.name,
+        code: building.code,
+        totalFloors: building.configuration.totalFloors,
+        flatsPerFloor: building.configuration.flatsPerFloor
+      }
+    });
+    console.log(`📡 [ADMIN] Notified admin ${adminId} about building creation`);
+    
+    // Broadcast to apartment room
+    emitToRoom(`apartment_${building.code}`, 'building_created', {
+      message: 'Building created',
+      building: {
+        id: building._id,
+        name: building.name,
+        code: building.code
+      }
+    });
+    console.log(`📡 [ADMIN] Broadcasted building creation to apartment ${building.code}`);
+
+    console.log('📊 [ADMIN] Building creation summary:');
+    console.log(`  - Building Name: ${building.name}`);
+    console.log(`  - Building Code: ${building.code}`);
+    console.log(`  - Total Floors: ${building.configuration.totalFloors}`);
+    console.log(`  - Flats per Floor: ${building.configuration.flatsPerFloor}`);
+    console.log(`  - Total Flats: ${building.configuration.totalFloors * building.configuration.flatsPerFloor}`);
+    console.log(`  - All Flats Created Dynamically: ✅`);
+
+    res.status(201).json({
+      success: true,
+      message: `Building created successfully with ${numFloors} floors and ${numFlatsPerFloor} flats per floor`,
+      data: {
+        building: {
+          ...building.toObject(),
+          summary: {
+            totalFloors: building.configuration.totalFloors,
+            flatsPerFloor: building.configuration.flatsPerFloor,
+            totalFlats: building.configuration.totalFloors * building.configuration.flatsPerFloor,
+            floors: building.configuration.floors.map(floor => ({
+              floorNumber: floor.floorNumber,
+              totalFlats: floor.flats.length,
+              flats: floor.flats.map(flat => ({
+                flatNumber: flat.flatNumber,
+                flatType: flat.flatType,
+                isOccupied: flat.isOccupied
+              }))
+            }))
+          }
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Create building error:', error);
+    console.error('❌ [ADMIN] Error stack:', error.stack);
+    
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'Building with this name or code already exists'
+      });
+    }
+
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(err => err.message).join(', ');
+      return res.status(400).json({
+        success: false,
+        message: messages
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error creating building',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Create user (resident or staff) - Admin only
+// @route   POST /api/admin/users
+// @access  Private (Admin)
+const createUser = async (req, res) => {
+  try {
+    console.log('👤 [ADMIN] Create user request received');
+    console.log('👤 [ADMIN] Request body:', JSON.stringify({ ...req.body, password: '***' }, null, 2));
+    
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+    
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admins can create users'
+      });
+    }
+
+    const {
+      fullName,
+      phoneNumber,
+      email,
+      password,
+      role,
+      floorNumber,
+      flatNumber,
+      flatType,
+      buildingCode
+    } = req.body;
+
+    // If buildingCode is provided, use it; otherwise get first building
+    let apartmentCode = buildingCode;
+    if (!apartmentCode) {
+      const firstBuilding = await Apartment.findOne({ createdBy: adminId, isActive: true })
+        .select('code')
+        .sort({ createdAt: 1 });
+      if (firstBuilding) {
+        apartmentCode = firstBuilding.code;
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'No building found. Please create a building first.'
+        });
+      }
+    }
+
+    // Verify building belongs to admin
+    const building = await Apartment.findOne({ code: apartmentCode, createdBy: adminId, isActive: true });
+    if (!building) {
+      return res.status(404).json({
+        success: false,
+        message: 'Building not found or access denied'
+      });
+    }
+
+    // Validate required fields
+    if (!fullName || !phoneNumber || !password || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: fullName, phoneNumber, password, and role are required'
+      });
+    }
+
+    // Validate role
+    if (!['resident', 'staff'].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid role. Must be resident or staff'
+      });
+    }
+
+    // Validate phone number format
+    const phoneRegex = /^[6-9]\d{9}$/;
+    if (!phoneRegex.test(phoneNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid Indian phone number'
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ phoneNumber });
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: 'User already exists with this phone number'
+      });
+    }
+
+    // For residents, validate flat assignment
+    if (role === 'resident') {
+      if (!floorNumber || !flatNumber || !flatType) {
+        return res.status(400).json({
+          success: false,
+          message: 'For residents, floorNumber, flatNumber, and flatType are required'
+        });
+      }
+
+      // Check if flat exists
+      if (!building.flatExists(floorNumber, flatNumber)) {
+        return res.status(400).json({
+          success: false,
+          message: `Flat ${flatNumber} not found on floor ${floorNumber}`
+        });
+      }
+
+      // Check if flat is already occupied
+      const flatDetails = building.getFlatDetails(floorNumber, flatNumber);
+      if (flatDetails && flatDetails.isOccupied) {
+        return res.status(409).json({
+          success: false,
+          message: `Flat ${flatNumber} on floor ${floorNumber} is already occupied`
+        });
+      }
+
+      // Check if another resident already has this flat
+      const existingResident = await User.findOne({
+        apartmentCode: apartmentCode,
+        floorNumber: parseInt(floorNumber),
+        flatNumber: flatNumber.toUpperCase(),
+        role: 'resident',
+        status: 'active'
+      });
+
+      if (existingResident) {
+        return res.status(409).json({
+          success: false,
+          message: 'This flat already has an active resident'
+        });
+      }
+    }
+
+    // Create user
+    const userData = {
+      fullName: fullName.trim(),
+      phoneNumber: phoneNumber.trim(),
+      email: email ? email.trim().toLowerCase() : undefined,
+      password: String(password),
+      role,
+      apartmentCode: apartmentCode,
+      status: 'active', // Admin-created users are auto-active
+      isVerified: true
+    };
+
+    // Add flat details for residents
+    if (role === 'resident') {
+      // Convert floorNumber to integer (handle both string and number)
+      const floorNum = typeof floorNumber === 'string' ? parseInt(floorNumber) : floorNumber;
+      
+      // Get flat details to retrieve flatCode
+      const flatDetails = building.getFlatDetails(floorNum, flatNumber.toUpperCase());
+      let flatCode = '';
+      
+      if (flatDetails && flatDetails.flatCode) {
+        flatCode = flatDetails.flatCode;
+      } else {
+        // Generate flatCode if not found in building
+        const buildingPrefix = building.name
+          .replace(/[^a-zA-Z0-9]/g, '')
+          .substring(0, 6)
+          .toUpperCase();
+        const flatNumStr = flatNumber.replace(/[^0-9]/g, '');
+        flatCode = `${buildingPrefix}-${floorNum}-${flatNumStr.padStart(2, '0')}`;
+      }
+      
+      console.log('🏠 [ADMIN] Setting user flat details:');
+      console.log('  - floorNumber:', floorNum, '(type:', typeof floorNum, ')');
+      console.log('  - flatNumber:', flatNumber.toUpperCase());
+      console.log('  - flatCode:', flatCode);
+      console.log('  - flatType:', flatType);
+      
+      userData.floorNumber = floorNum;
+      userData.flatNumber = flatNumber.toUpperCase();
+      userData.flatCode = flatCode.toUpperCase();
+      userData.flatType = flatType;
+      userData.wing = 'A'; // Default wing, can be customized later
+      userData.registeredAt = new Date();
+      userData.lastUpdatedAt = new Date();
+    }
+
+    const user = await User.create(userData);
+
+    // Mark flat as occupied if resident
+    if (role === 'resident') {
+      const floorNum = typeof floorNumber === 'string' ? parseInt(floorNumber) : floorNumber;
+      console.log('🏠 [ADMIN] Marking flat as occupied: Floor', floorNum, 'Flat', flatNumber);
+      building.markFlatOccupied(floorNum, flatNumber.toUpperCase(), user._id);
+      await building.save();
+      console.log('✅ [ADMIN] Flat marked as occupied successfully');
+      
+      // Emit real-time event for flat status update
+      emitToRoom(`apartment_${apartmentCode}`, 'flat_status_updated', {
+        message: 'Flat status updated',
+        buildingCode: apartmentCode,
+        flat: {
+          floorNumber: floorNum,
+          flatNumber: flatNumber.toUpperCase(),
+          flatCode: user.flatCode,
+          isOccupied: true,
+          occupiedBy: {
+            userId: user._id,
+            fullName: user.fullName,
+            phoneNumber: user.phoneNumber
+          }
+        },
+        timestamp: new Date()
+      });
+      console.log(`📡 [ADMIN] Broadcasted flat status update to apartment ${apartmentCode}`);
+    }
+
+    console.log(`✅ [ADMIN] User created: ${user._id}`);
+
+    // Emit real-time events
+    console.log('📡 [ADMIN] Emitting real-time events for user creation');
+    
+    // Notify admin
+    emitToUser(adminId.toString(), 'user_created', {
+      message: `${role} account created successfully`,
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        role: user.role,
+        phoneNumber: user.phoneNumber
+      }
+    });
+    console.log(`📡 [ADMIN] Notified admin ${adminId} about user creation`);
+    
+    // Broadcast to apartment room for real-time updates
+    emitToRoom(`apartment_${apartmentCode}`, 'user_created', {
+      message: 'New user created',
+      buildingCode: apartmentCode,
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        role: user.role,
+        phoneNumber: user.phoneNumber
+      },
+      timestamp: new Date()
+    });
+    console.log(`📡 [ADMIN] Broadcasted user creation to apartment ${apartmentCode}`);
+
+    res.status(201).json({
+      success: true,
+      message: `${role} account created successfully`,
+      data: {
+        user: {
+          id: user._id,
+          fullName: user.fullName,
+          phoneNumber: user.phoneNumber,
+          email: user.email,
+          role: user.role,
+          apartmentCode: user.apartmentCode,
+          floorNumber: user.floorNumber,
+          flatNumber: user.flatNumber,
+          flatType: user.flatType,
+          status: user.status
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Create user error:', error);
+    console.error('❌ [ADMIN] Error stack:', error.stack);
+    
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'User already exists with this phone number or email'
+      });
+    }
+
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(err => err.message).join(', ');
+      return res.status(400).json({
+        success: false,
+        message: messages
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error creating user',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get all users (residents and staff) - Admin only
+// @route   GET /api/admin/users
+// @access  Private (Admin)
+const getAllUsers = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const { buildingCode, role, status } = req.query;
+    const admin = await User.findById(adminId);
+    
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    // If buildingCode is provided, use it; otherwise get all buildings for admin
+    let apartmentCode = buildingCode;
+    let filter = {
+      role: { $ne: 'admin' } // Exclude admins
+    };
+
+    if (apartmentCode) {
+      // Verify building belongs to admin
+      const building = await Apartment.findOne({ code: apartmentCode, createdBy: adminId, isActive: true });
+      if (!building) {
+        return res.status(404).json({
+          success: false,
+          message: 'Building not found or access denied'
+        });
+      }
+      filter.apartmentCode = apartmentCode;
+    } else {
+      // Get all buildings created by admin
+      const adminBuildings = await Apartment.find({ createdBy: adminId, isActive: true }).select('code');
+      const buildingCodes = adminBuildings.map(b => b.code);
+      if (buildingCodes.length > 0) {
+        filter.apartmentCode = { $in: buildingCodes };
+      } else {
+        // No buildings found
+        return res.status(200).json({
+          success: true,
+          data: {
+            users: [],
+            total: 0
+          }
+        });
+      }
+    }
+
+    if (role) filter.role = role;
+    if (status) filter.status = status;
+
+    const users = await User.find(filter)
+      .select('-password')
+      .sort({ createdAt: -1 });
+
+    // Get statistics
+    const residents = users.filter(u => u.role === 'resident').length;
+    const staff = users.filter(u => u.role === 'staff').length;
+    const active = users.filter(u => u.status === 'active').length;
+    const inactive = users.filter(u => u.status !== 'active').length;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        users,
+        total: users.length,
+        statistics: {
+          residents,
+          staff,
+          active,
+          inactive
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Get all users error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching users'
+    });
+  }
+};
+
+// @desc    Get building details with floors and flats - Admin only
+// @route   GET /api/admin/building-details
+// @access  Private (Admin)
+const getBuildingDetails = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const { buildingCode } = req.query; // Get building code from query params
+    
+    const admin = await User.findById(adminId);
+    
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    // If buildingCode is provided, use it; otherwise get first building
+    let apartmentCode = buildingCode;
+    if (!apartmentCode) {
+      const firstBuilding = await Apartment.findOne({ createdBy: adminId, isActive: true })
+        .select('code')
+        .sort({ createdAt: 1 });
+      if (firstBuilding) {
+        apartmentCode = firstBuilding.code;
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'No building found'
+        });
+      }
+    }
+
+    // Verify building belongs to admin
+    const building = await Apartment.findOne({ code: apartmentCode, createdBy: adminId, isActive: true });
+    if (!building) {
+      return res.status(404).json({
+        success: false,
+        message: 'Building not found'
+      });
+    }
+
+    // Get occupied flats
+    const occupiedFlats = await User.find({
+      apartmentCode: apartmentCode,
+      role: 'resident',
+      status: 'active'
+    }).select('floorNumber flatNumber flatType fullName phoneNumber');
+
+    // Map occupied flats for quick lookup
+    const occupiedMap = {};
+    occupiedFlats.forEach(user => {
+      const key = `${user.floorNumber}-${user.flatNumber}`;
+      occupiedMap[key] = {
+        userId: user._id,
+        fullName: user.fullName,
+        phoneNumber: user.phoneNumber,
+        flatType: user.flatType
+      };
+    });
+
+    // Enhance floors with occupancy info
+    const floorsWithDetails = building.configuration.floors.map(floor => ({
+      floorNumber: floor.floorNumber,
+      flats: floor.flats.map(flat => {
+        const key = `${floor.floorNumber}-${flat.flatNumber}`;
+        return {
+          flatNumber: flat.flatNumber,
+          flatType: flat.flatType,
+          squareFeet: flat.squareFeet,
+          isOccupied: flat.isOccupied || occupiedMap[key] != null,
+          occupiedBy: occupiedMap[key] || null
+        };
+      })
+    }));
+
+    // Calculate comprehensive statistics
+    const totalFlats = building.configuration.totalFloors * building.configuration.flatsPerFloor;
+    const occupiedCount = occupiedFlats.length;
+    const vacantCount = totalFlats - occupiedCount;
+    const occupancyRate = totalFlats > 0 ? ((occupiedCount / totalFlats) * 100).toFixed(2) : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        building: {
+          id: building._id,
+          name: building.name,
+          code: building.code,
+          buildingCategory: building.buildingCategory,
+          buildingType: building.buildingType,
+          address: building.address,
+          contact: building.contact,
+          structuralDetails: building.structuralDetails,
+          safetyCompliance: building.safetyCompliance,
+          utilities: building.utilities,
+          parking: building.parking,
+          amenities: building.amenities,
+          totalFloors: building.configuration.totalFloors,
+          flatsPerFloor: building.configuration.flatsPerFloor,
+          totalFlats: totalFlats,
+          floors: floorsWithDetails,
+          createdAt: building.createdAt,
+          updatedAt: building.updatedAt
+        },
+        statistics: {
+          totalFlats: totalFlats,
+          occupiedFlats: occupiedCount,
+          vacantFlats: vacantCount,
+          occupancyRate: parseFloat(occupancyRate),
+          totalResidents: occupiedCount,
+          totalStaff: await User.countDocuments({
+            apartmentCode: apartmentCode,
+            role: 'staff',
+            status: 'active'
+          })
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Get building details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching building details'
+    });
+  }
+};
+
+// @desc    Get available flats for user creation - Admin only
+// @route   GET /api/admin/available-flats
+// @access  Private (Admin)
+const getAvailableFlats = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const { buildingCode } = req.query;
+    const admin = await User.findById(adminId);
+    
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    // If buildingCode is provided, use it; otherwise get first building
+    let apartmentCode = buildingCode;
+    if (!apartmentCode) {
+      const firstBuilding = await Apartment.findOne({ createdBy: adminId, isActive: true })
+        .select('code')
+        .sort({ createdAt: 1 });
+      if (firstBuilding) {
+        apartmentCode = firstBuilding.code;
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'No building found. Please create a building first.'
+        });
+      }
+    }
+
+    // Verify building belongs to admin
+    const building = await Apartment.findOne({ code: apartmentCode, createdBy: adminId, isActive: true });
+    if (!building) {
+      return res.status(404).json({
+        success: false,
+        message: 'Building not found or access denied'
+      });
+    }
+
+    // Get occupied flats
+    const occupiedFlats = await User.find({
+      apartmentCode: apartmentCode,
+      role: 'resident',
+      status: 'active'
+    }).select('floorNumber flatNumber');
+
+    // Create occupied map
+    const occupiedMap = {};
+    occupiedFlats.forEach(user => {
+      const key = `${user.floorNumber}-${user.flatNumber}`;
+      occupiedMap[key] = true;
+    });
+
+    // Get available flats
+    const availableFlats = [];
+    building.configuration.floors.forEach(floor => {
+      floor.flats.forEach(flat => {
+        const key = `${floor.floorNumber}-${flat.flatNumber}`;
+        if (!occupiedMap[key]) {
+          availableFlats.push({
+            floorNumber: floor.floorNumber,
+            flatNumber: flat.flatNumber,
+            flatType: flat.flatType,
+            squareFeet: flat.squareFeet
+          });
+        }
+      });
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        availableFlats,
+        total: availableFlats.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Get available flats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching available flats'
+    });
+  }
+};
+
+module.exports = {
+  getAdminDashboard,
+  getAllBuildings,
+  getPendingApprovals,
+  updateUserApproval,
+  getAllComplaints,
+  assignComplaintToStaff,
+  getAllStaff,
+  createApartment: createBuilding, // Keep backward compatibility
+  createBuilding,
+  createUser,
+  getAllUsers,
+  getBuildingDetails,
+  getAvailableFlats
+};
