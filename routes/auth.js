@@ -8,7 +8,9 @@ const {
   verifyOTPAndRegister,
   verifyOTPAndLogin,
   passwordLogin,
-  getMe
+  getMe,
+  adminLogin,
+  adminRegister
 } = require('../controllers/authController');
 
 // Debug each route
@@ -36,6 +38,17 @@ router.get('/me', (req, res, next) => {
   console.log('👤 Get Me route hit');
   next();
 }, getMe);
+
+// Admin routes
+router.post('/admin/login', (req, res, next) => {
+  console.log('👔 Admin Login route hit');
+  next();
+}, adminLogin);
+
+router.post('/admin/register', (req, res, next) => {
+  console.log('👔 Admin Register route hit');
+  next();
+}, adminRegister);
 
 console.log('✅ Auth routes loaded successfully');
 

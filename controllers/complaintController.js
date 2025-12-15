@@ -48,6 +48,8 @@ const createComplaint = async (req, res) => {
     // Populate createdBy for response
     await complaint.populate('createdBy', 'fullName phoneNumber wing flatNumber');
 
+    console.log('📡 [COMPLAINT] Emitting real-time events for complaint creation');
+    
     // Notify admins about new complaint
     const admins = await User.find({ role: 'admin', status: 'active' });
     admins.forEach(admin => {
@@ -63,11 +65,24 @@ const createComplaint = async (req, res) => {
         }
       });
     });
+    console.log(`📡 [COMPLAINT] Notified ${admins.length} admins about new complaint`);
 
     // Broadcast to admin room
     emitToRoom('admin', 'complaint_created', {
       complaint: complaint
     });
+    console.log('📡 [COMPLAINT] Broadcasted complaint creation to admin room');
+    
+    // Notify user about successful complaint creation
+    emitToUser(complaint.createdBy.toString(), 'complaint_created', {
+      message: 'Complaint submitted successfully',
+      complaint: {
+        id: complaint._id,
+        ticketNumber: complaint.ticketNumber,
+        title: complaint.title
+      }
+    });
+    console.log(`📡 [COMPLAINT] Notified user ${complaint.createdBy} about complaint creation`);
 
     res.status(201).json({
       success: true,
@@ -242,6 +257,8 @@ const addWorkUpdate = async (req, res) => {
     // Populate for response
     await complaint.populate('workUpdates.updatedBy', 'fullName role profilePicture');
 
+    console.log('📡 [COMPLAINT] Emitting real-time events for work update');
+    
     // Notify user about work update
     emitToUser(complaint.createdBy.toString(), 'work_update_added', {
       message: 'Work update added to your complaint',
@@ -252,6 +269,7 @@ const addWorkUpdate = async (req, res) => {
       },
       update: complaint.workUpdates[complaint.workUpdates.length - 1]
     });
+    console.log(`📡 [COMPLAINT] Notified user ${complaint.createdBy} about work update`);
 
     // Notify admins
     emitToRoom('admin', 'complaint_updated', {
@@ -259,6 +277,7 @@ const addWorkUpdate = async (req, res) => {
       updateType: 'work_update',
       update: complaint.workUpdates[complaint.workUpdates.length - 1]
     });
+    console.log('📡 [COMPLAINT] Notified admins about complaint update');
 
     res.status(200).json({
       success: true,
