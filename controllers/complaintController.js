@@ -1,7 +1,7 @@
-const Complaint = require('../models/Complaint');
-const User = require('../models/User');
-const Staff = require('../models/Staff');
-const { emitToUser, emitToRoom } = require('../services/socketService');
+const Complaint = require("../models/Complaint");
+const User = require("../models/User");
+const Staff = require("../models/Staff");
+const { emitToUser, emitToRoom } = require("../services/socketService");
 
 // @desc    Create new complaint
 // @route   POST /api/complaints
@@ -16,20 +16,20 @@ const createComplaint = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: "User not found",
       });
     }
 
     // Check if user has too many active complaints
     const activeComplaintsCount = await Complaint.countDocuments({
       createdBy: userId,
-      status: { $in: ['Open', 'Assigned', 'In Progress'] }
+      status: { $in: ["Open", "Assigned", "In Progress"] },
     });
 
     if (activeComplaintsCount >= 5) {
       return res.status(400).json({
         success: false,
-        message: 'You have reached the maximum limit of 5 active complaints'
+        message: "You have reached the maximum limit of 5 active complaints",
       });
     }
 
@@ -41,61 +41,73 @@ const createComplaint = async (req, res) => {
         ...complaintData.location,
         wing: user.wing,
         flatNumber: user.flatNumber,
-        floorNumber: user.floorNumber
-      }
+        floorNumber: user.floorNumber,
+      },
     });
 
     // Populate createdBy for response
-    await complaint.populate('createdBy', 'fullName phoneNumber wing flatNumber');
+    await complaint.populate(
+      "createdBy",
+      "fullName phoneNumber wing flatNumber"
+    );
 
-    console.log('📡 [COMPLAINT] Emitting real-time events for complaint creation');
-    
+    console.log(
+      "📡 [COMPLAINT] Emitting real-time events for complaint creation"
+    );
+
     // Notify admins about new complaint
-    const admins = await User.find({ role: 'admin', status: 'active' });
-    admins.forEach(admin => {
-      emitToUser(admin._id.toString(), 'new_complaint', {
-        message: 'New complaint submitted',
+    const admins = await User.find({ role: "admin", status: "active" });
+    admins.forEach((admin) => {
+      emitToUser(admin._id.toString(), "new_complaint", {
+        message: "New complaint submitted",
         complaint: {
           id: complaint._id,
           ticketNumber: complaint.ticketNumber,
           title: complaint.title,
           category: complaint.category,
           priority: complaint.priority,
-          createdBy: complaint.createdBy.fullName
-        }
+          createdBy: complaint.createdBy.fullName,
+        },
       });
     });
-    console.log(`📡 [COMPLAINT] Notified ${admins.length} admins about new complaint`);
+    console.log(
+      `📡 [COMPLAINT] Notified ${admins.length} admins about new complaint`
+    );
 
     // Broadcast to admin room
-    emitToRoom('admin', 'complaint_created', {
-      complaint: complaint
+    emitToRoom("admin", "complaint_created", {
+      complaint: complaint,
     });
-    console.log('📡 [COMPLAINT] Broadcasted complaint creation to admin room');
-    
+    console.log("📡 [COMPLAINT] Broadcasted complaint creation to admin room");
+
     // Notify user about successful complaint creation
-    emitToUser(complaint.createdBy.toString(), 'complaint_created', {
-      message: 'Complaint submitted successfully',
+    const complaintCreatorId =
+      complaint.createdBy && complaint.createdBy._id
+        ? complaint.createdBy._id.toString()
+        : complaint.createdBy.toString();
+    emitToUser(complaintCreatorId, "complaint_created", {
+      message: "Complaint submitted successfully",
       complaint: {
         id: complaint._id,
         ticketNumber: complaint.ticketNumber,
-        title: complaint.title
-      }
+        title: complaint.title,
+      },
     });
-    console.log(`📡 [COMPLAINT] Notified user ${complaint.createdBy} about complaint creation`);
+    console.log(
+      `📡 [COMPLAINT] Notified user ${complaintCreatorId} about complaint creation`
+    );
 
     res.status(201).json({
       success: true,
-      message: 'Complaint submitted successfully',
-      data: { complaint }
+      message: "Complaint submitted successfully",
+      data: { complaint },
     });
-
   } catch (error) {
-    console.error('Create complaint error:', error);
+    console.error("Create complaint error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error creating complaint',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Error creating complaint",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -117,11 +129,14 @@ const getMyComplaints = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const complaints = await Complaint.find(filter)
-      .populate('createdBy', 'fullName phoneNumber')
-      .populate('assignedTo.staff', 'user')
+      .populate("createdBy", "fullName phoneNumber")
+      .populate("assignedTo.staff", "user")
       .populate({
-        path: 'assignedTo.staff',
-        populate: { path: 'user', select: 'fullName phoneNumber profilePicture' }
+        path: "assignedTo.staff",
+        populate: {
+          path: "user",
+          select: "fullName phoneNumber profilePicture",
+        },
       })
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -137,16 +152,15 @@ const getMyComplaints = async (req, res) => {
           page: parseInt(page),
           limit: parseInt(limit),
           total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+          pages: Math.ceil(total / limit),
+        },
+      },
     });
-
   } catch (error) {
-    console.error('Get my complaints error:', error);
+    console.error("Get my complaints error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching complaints'
+      message: "Error fetching complaints",
     });
   }
 };
@@ -162,23 +176,20 @@ const getComplaint = async (req, res) => {
 
     let complaint;
 
-    if (userRole === 'resident') {
+    if (userRole === "resident") {
       // Residents can only see their own complaints
       complaint = await Complaint.findOne({
         _id: complaintId,
-        createdBy: userId
+        createdBy: userId,
       });
-    } else if (userRole === 'staff') {
+    } else if (userRole === "staff") {
       // Staff can see assigned complaints
       const staff = await Staff.findOne({ user: userId });
       complaint = await Complaint.findOne({
         _id: complaintId,
-        $or: [
-          { createdBy: userId },
-          { 'assignedTo.staff': staff?._id }
-        ]
+        $or: [{ createdBy: userId }, { "assignedTo.staff": staff?._id }],
       });
-    } else if (userRole === 'admin') {
+    } else if (userRole === "admin") {
       // Admins can see all complaints
       complaint = await Complaint.findById(complaintId);
     }
@@ -186,30 +197,32 @@ const getComplaint = async (req, res) => {
     if (!complaint) {
       return res.status(404).json({
         success: false,
-        message: 'Complaint not found'
+        message: "Complaint not found",
       });
     }
 
     // Populate necessary fields
-    await complaint.populate('createdBy', 'fullName phoneNumber wing flatNumber profilePicture');
-    await complaint.populate('assignedTo.staff', 'user specialization');
+    await complaint.populate(
+      "createdBy",
+      "fullName phoneNumber wing flatNumber profilePicture"
+    );
+    await complaint.populate("assignedTo.staff", "user specialization");
     await complaint.populate({
-      path: 'assignedTo.staff',
-      populate: { path: 'user', select: 'fullName phoneNumber profilePicture' }
+      path: "assignedTo.staff",
+      populate: { path: "user", select: "fullName phoneNumber profilePicture" },
     });
-    await complaint.populate('timeline.updatedBy', 'fullName role');
-    await complaint.populate('workUpdates.updatedBy', 'fullName role');
+    await complaint.populate("timeline.updatedBy", "fullName role");
+    await complaint.populate("workUpdates.updatedBy", "fullName role");
 
     res.status(200).json({
       success: true,
-      data: { complaint }
+      data: { complaint },
     });
-
   } catch (error) {
-    console.error('Get complaint error:', error);
+    console.error("Get complaint error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching complaint'
+      message: "Error fetching complaint",
     });
   }
 };
@@ -228,20 +241,20 @@ const addWorkUpdate = async (req, res) => {
     if (!staff) {
       return res.status(404).json({
         success: false,
-        message: 'Staff profile not found'
+        message: "Staff profile not found",
       });
     }
 
     // Check if complaint is assigned to this staff
     const complaint = await Complaint.findOne({
       _id: complaintId,
-      'assignedTo.staff': staff._id
+      "assignedTo.staff": staff._id,
     });
 
     if (!complaint) {
       return res.status(403).json({
         success: false,
-        message: 'Complaint not assigned to you'
+        message: "Complaint not assigned to you",
       });
     }
 
@@ -249,47 +262,51 @@ const addWorkUpdate = async (req, res) => {
     complaint.workUpdates.push({
       description,
       images: images || [],
-      updatedBy: staffId
+      updatedBy: staffId,
     });
 
     await complaint.save();
 
     // Populate for response
-    await complaint.populate('workUpdates.updatedBy', 'fullName role profilePicture');
+    await complaint.populate(
+      "workUpdates.updatedBy",
+      "fullName role profilePicture"
+    );
 
-    console.log('📡 [COMPLAINT] Emitting real-time events for work update');
-    
+    console.log("📡 [COMPLAINT] Emitting real-time events for work update");
+
     // Notify user about work update
-    emitToUser(complaint.createdBy.toString(), 'work_update_added', {
-      message: 'Work update added to your complaint',
+    emitToUser(complaint.createdBy.toString(), "work_update_added", {
+      message: "Work update added to your complaint",
       complaint: {
         id: complaint._id,
         ticketNumber: complaint.ticketNumber,
-        title: complaint.title
+        title: complaint.title,
       },
-      update: complaint.workUpdates[complaint.workUpdates.length - 1]
+      update: complaint.workUpdates[complaint.workUpdates.length - 1],
     });
-    console.log(`📡 [COMPLAINT] Notified user ${complaint.createdBy} about work update`);
+    console.log(
+      `📡 [COMPLAINT] Notified user ${complaint.createdBy} about work update`
+    );
 
     // Notify admins
-    emitToRoom('admin', 'complaint_updated', {
+    emitToRoom("admin", "complaint_updated", {
       complaintId: complaint._id,
-      updateType: 'work_update',
-      update: complaint.workUpdates[complaint.workUpdates.length - 1]
+      updateType: "work_update",
+      update: complaint.workUpdates[complaint.workUpdates.length - 1],
     });
-    console.log('📡 [COMPLAINT] Notified admins about complaint update');
+    console.log("📡 [COMPLAINT] Notified admins about complaint update");
 
     res.status(200).json({
       success: true,
-      message: 'Work update added successfully',
-      data: { complaint }
+      message: "Work update added successfully",
+      data: { complaint },
     });
-
   } catch (error) {
-    console.error('Add work update error:', error);
+    console.error("Add work update error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error adding work update'
+      message: "Error adding work update",
     });
   }
 };
@@ -307,17 +324,20 @@ const updateComplaintStatus = async (req, res) => {
     if (!complaint) {
       return res.status(404).json({
         success: false,
-        message: 'Complaint not found'
+        message: "Complaint not found",
       });
     }
 
     // Check permissions
-    if (req.user.role === 'staff') {
+    if (req.user.role === "staff") {
       const staff = await Staff.findOne({ user: userId });
-      if (!staff || complaint.assignedTo.staff.toString() !== staff._id.toString()) {
+      if (
+        !staff ||
+        complaint.assignedTo.staff.toString() !== staff._id.toString()
+      ) {
         return res.status(403).json({
           success: false,
-          message: 'Not authorized to update this complaint'
+          message: "Not authorized to update this complaint",
         });
       }
     }
@@ -326,42 +346,41 @@ const updateComplaintStatus = async (req, res) => {
     await complaint.updateStatus(status, description, userId);
 
     // Populate for response
-    await complaint.populate('createdBy', 'fullName phoneNumber');
-    await complaint.populate('assignedTo.staff', 'user');
+    await complaint.populate("createdBy", "fullName phoneNumber");
+    await complaint.populate("assignedTo.staff", "user");
     await complaint.populate({
-      path: 'assignedTo.staff',
-      populate: { path: 'user', select: 'fullName phoneNumber' }
+      path: "assignedTo.staff",
+      populate: { path: "user", select: "fullName phoneNumber" },
     });
 
     // Notify user about status change
-    emitToUser(complaint.createdBy.toString(), 'complaint_status_updated', {
+    emitToUser(complaint.createdBy.toString(), "complaint_status_updated", {
       message: `Complaint status updated to ${status}`,
       complaint: {
         id: complaint._id,
         ticketNumber: complaint.ticketNumber,
         title: complaint.title,
-        status: complaint.status
-      }
+        status: complaint.status,
+      },
     });
 
     // Notify admins
-    emitToRoom('admin', 'complaint_status_changed', {
+    emitToRoom("admin", "complaint_status_changed", {
       complaintId: complaint._id,
       newStatus: status,
-      updatedBy: userId
+      updatedBy: userId,
     });
 
     res.status(200).json({
       success: true,
-      message: 'Complaint status updated successfully',
-      data: { complaint }
+      message: "Complaint status updated successfully",
+      data: { complaint },
     });
-
   } catch (error) {
-    console.error('Update complaint status error:', error);
+    console.error("Update complaint status error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error updating complaint status'
+      message: "Error updating complaint status",
     });
   }
 };
@@ -378,13 +397,13 @@ const rateComplaint = async (req, res) => {
     const complaint = await Complaint.findOne({
       _id: complaintId,
       createdBy: userId,
-      status: 'Resolved'
+      status: "Resolved",
     });
 
     if (!complaint) {
       return res.status(404).json({
         success: false,
-        message: 'Complaint not found or not eligible for rating'
+        message: "Complaint not found or not eligible for rating",
       });
     }
 
@@ -392,7 +411,7 @@ const rateComplaint = async (req, res) => {
     complaint.rating = {
       score,
       comment,
-      ratedAt: new Date()
+      ratedAt: new Date(),
     };
 
     await complaint.save();
@@ -404,31 +423,32 @@ const rateComplaint = async (req, res) => {
 
     // Notify staff about rating
     if (complaint.assignedTo.staff) {
-      const staff = await Staff.findById(complaint.assignedTo.staff).populate('user');
+      const staff = await Staff.findById(complaint.assignedTo.staff).populate(
+        "user"
+      );
       if (staff) {
-        emitToUser(staff.user._id.toString(), 'complaint_rated', {
-          message: 'Your work has been rated',
+        emitToUser(staff.user._id.toString(), "complaint_rated", {
+          message: "Your work has been rated",
           complaint: {
             id: complaint._id,
             ticketNumber: complaint.ticketNumber,
-            title: complaint.title
+            title: complaint.title,
           },
-          rating: { score, comment }
+          rating: { score, comment },
         });
       }
     }
 
     res.status(200).json({
       success: true,
-      message: 'Complaint rated successfully',
-      data: { complaint }
+      message: "Complaint rated successfully",
+      data: { complaint },
     });
-
   } catch (error) {
-    console.error('Rate complaint error:', error);
+    console.error("Rate complaint error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error rating complaint'
+      message: "Error rating complaint",
     });
   }
 };
@@ -442,34 +462,30 @@ const updateStaffPerformance = async (staffId) => {
   const stats = await Complaint.aggregate([
     {
       $match: {
-        'assignedTo.staff': staffId,
-        'rating.score': { $exists: true }
-      }
+        "assignedTo.staff": staffId,
+        "rating.score": { $exists: true },
+      },
     },
     {
       $group: {
         _id: null,
         totalComplaints: { $sum: 1 },
-        averageRating: { $avg: '$rating.score' },
+        averageRating: { $avg: "$rating.score" },
         averageResolutionTime: {
           $avg: {
             $divide: [
-              { $subtract: ['$resolution.resolvedAt', '$createdAt'] },
-              1000 * 60 * 60 // Convert to hours
-            ]
-          }
+              { $subtract: ["$resolution.resolvedAt", "$createdAt"] },
+              1000 * 60 * 60, // Convert to hours
+            ],
+          },
         },
         slaCompliant: {
           $avg: {
-            $cond: [
-              { $eq: ['$sla.isBreached', false] },
-              1,
-              0
-            ]
-          }
-        }
-      }
-    }
+            $cond: [{ $eq: ["$sla.isBreached", false] }, 1, 0],
+          },
+        },
+      },
+    },
   ]);
 
   if (stats.length > 0) {
@@ -477,8 +493,9 @@ const updateStaffPerformance = async (staffId) => {
       totalComplaints: stats[0].totalComplaints,
       resolvedComplaints: stats[0].totalComplaints,
       averageRating: Math.round(stats[0].averageRating * 10) / 10,
-      averageResolutionTime: Math.round(stats[0].averageResolutionTime * 10) / 10,
-      slaCompliance: Math.round(stats[0].slaCompliant * 100)
+      averageResolutionTime:
+        Math.round(stats[0].averageResolutionTime * 10) / 10,
+      slaCompliance: Math.round(stats[0].slaCompliant * 100),
     };
 
     await staff.save();
@@ -491,5 +508,5 @@ module.exports = {
   getComplaint,
   addWorkUpdate,
   updateComplaintStatus,
-  rateComplaint
+  rateComplaint,
 };
