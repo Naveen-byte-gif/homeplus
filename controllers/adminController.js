@@ -431,27 +431,87 @@ const getAllComplaints = async (req, res) => {
       category,
       priority,
       wing,
+      buildingCode,
     } = req.query;
 
-    // Get admin's apartment code
+    // Get admin user
     const admin = await User.findById(adminId);
-    if (!admin) {
-      return res.status(404).json({
+    if (!admin || admin.role !== "admin") {
+      return res.status(403).json({
         success: false,
-        message: "Admin not found",
+        message: "Unauthorized",
       });
     }
 
     // Build filter
     const filter = {};
 
+    // Get all buildings created by this admin
+    let apartmentCode = buildingCode;
+    let buildingCodes = [];
+
+    if (apartmentCode) {
+      // Verify building belongs to admin
+      const building = await Apartment.findOne({
+        code: apartmentCode,
+        createdBy: adminId,
+        isActive: true,
+      });
+      if (!building) {
+        return res.status(404).json({
+          success: false,
+          message: "Building not found or access denied",
+        });
+      }
+      buildingCodes = [apartmentCode];
+    } else {
+      // Get all buildings created by admin
+      const adminBuildings = await Apartment.find({
+        createdBy: adminId,
+        isActive: true,
+      }).select("code");
+      buildingCodes = adminBuildings.map((b) => b.code);
+      
+      if (buildingCodes.length === 0) {
+        // No buildings found - return empty result
+        return res.status(200).json({
+          success: true,
+          data: {
+            complaints: [],
+            pagination: {
+              page: parseInt(page),
+              limit: parseInt(limit),
+              total: 0,
+              pages: 0,
+            },
+          },
+        });
+      }
+    }
+
     // Filter by apartment through user lookup
-    const userFilter = { apartmentCode: admin.apartmentCode };
+    const userFilter = { apartmentCode: { $in: buildingCodes } };
     if (wing) userFilter.wing = wing;
 
-    // Get users from the same apartment
+    // Get users from the admin's buildings
     const apartmentUsers = await User.find(userFilter).select("_id");
     const userIds = apartmentUsers.map((user) => user._id);
+
+    if (userIds.length === 0) {
+      // No users found in admin's buildings
+      return res.status(200).json({
+        success: true,
+        data: {
+          complaints: [],
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: 0,
+            pages: 0,
+          },
+        },
+      });
+    }
 
     filter.createdBy = { $in: userIds };
 
@@ -465,7 +525,7 @@ const getAllComplaints = async (req, res) => {
     const complaints = await Complaint.find(filter)
       .populate(
         "createdBy",
-        "fullName phoneNumber wing flatNumber profilePicture"
+        "fullName phoneNumber wing flatNumber profilePicture apartmentCode"
       )
       .populate("assignedTo.staff", "user")
       .populate({
@@ -495,6 +555,7 @@ const getAllComplaints = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error fetching complaints",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };

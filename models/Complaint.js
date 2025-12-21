@@ -89,6 +89,25 @@ const complaintSchema = new mongoose.Schema(
         timestamp: { type: Date, default: Date.now },
       },
     ],
+    // Immutable status history for audit trail
+    statusHistory: [
+      {
+        fromStatus: { type: String, required: true },
+        toStatus: { type: String, required: true },
+        reason: String, // Mandatory for certain transitions
+        updatedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        updatedByRole: { type: String, required: true },
+        timestamp: { type: Date, default: Date.now, immutable: true },
+        ipAddress: String,
+        userAgent: String,
+        // Additional metadata
+        metadata: mongoose.Schema.Types.Mixed,
+      },
+    ],
     workUpdates: [
       {
         description: String,
@@ -131,6 +150,40 @@ const complaintSchema = new mongoose.Schema(
         isInternal: { type: Boolean, default: true },
       },
     ],
+    // Comments for transparent communication
+    comments: [
+      {
+        text: {
+          type: String,
+          required: true,
+          trim: true,
+          maxlength: [1000, "Comment cannot exceed 1000 characters"],
+        },
+        postedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        postedAt: { type: Date, default: Date.now },
+        media: [
+          {
+            url: String,
+            publicId: String,
+            type: { type: String, enum: ["image", "video"] },
+          },
+        ],
+        isEdited: { type: Boolean, default: false },
+        editedAt: Date,
+      },
+    ],
+    // Track if ticket was previously closed (for reopen logic)
+    previouslyClosed: { type: Boolean, default: false },
+    closedAt: Date,
+    reopenedAt: Date,
+    reopenedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    cancelledAt: Date,
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    cancellationReason: String,
   },
   {
     timestamps: true,
@@ -174,29 +227,121 @@ complaintSchema.pre("validate", async function (next) {
   next();
 });
 
-// Instance method to update status with timeline tracking
+// Instance method to update status with timeline tracking and audit history
 complaintSchema.methods.updateStatus = async function (
   newStatus,
   description,
-  updatedBy
+  updatedBy,
+  options = {}
 ) {
+  const oldStatus = this.status;
+  const { updatedByRole, ipAddress, userAgent, metadata = {} } = options;
+
   this.status = newStatus;
+
+  // Update timeline (existing functionality)
   this.timeline.push({
     status: newStatus,
-    description: description,
+    description:
+      description || `Status changed from ${oldStatus} to ${newStatus}`,
     updatedBy: updatedBy,
   });
 
+  // Add immutable status history entry (audit trail)
+  this.statusHistory.push({
+    fromStatus: oldStatus,
+    toStatus: newStatus,
+    reason: description || null,
+    updatedBy: updatedBy,
+    updatedByRole: updatedByRole || "unknown",
+    timestamp: new Date(), // Immutable timestamp
+    ipAddress: ipAddress || null,
+    userAgent: userAgent || null,
+    metadata: {
+      ...metadata,
+      ticketNumber: this.ticketNumber,
+      category: this.category,
+      priority: this.priority,
+    },
+  });
+
+  // Handle status-specific logic
   if (newStatus === "Resolved") {
     this.resolution.resolvedAt = new Date();
     this.resolution.resolvedBy = updatedBy;
     this.sla.actualResolution = new Date();
     this.sla.isBreached =
       this.sla.actualResolution > this.sla.expectedResolution;
+  } else if (newStatus === "Closed") {
+    this.closedAt = new Date();
+    this.previouslyClosed = true;
+  } else if (newStatus === "Reopened") {
+    this.reopenedAt = new Date();
+    this.reopenedBy = updatedBy;
+    // Reset resolution data when reopening
+    this.resolution = {
+      description: "",
+      resolvedAt: null,
+      resolvedBy: null,
+      images: [],
+    };
+  } else if (newStatus === "Cancelled") {
+    this.cancelledAt = new Date();
+    this.cancelledBy = updatedBy;
+  } else if (newStatus === "Assigned") {
+    // Assigned status is set when staff is assigned
+    if (!this.assignedTo.assignedAt) {
+      this.assignedTo.assignedAt = new Date();
+    }
   }
 
   await this.save();
   return this;
+};
+
+// Instance method to add comment
+complaintSchema.methods.addComment = async function (
+  text,
+  postedBy,
+  media = []
+) {
+  this.comments.push({
+    text,
+    postedBy,
+    media,
+  });
+  await this.save();
+  return this.comments[this.comments.length - 1];
+};
+
+// Instance method to validate status transition
+complaintSchema.methods.canTransitionTo = function (newStatus, userRole) {
+  const validTransitions = {
+    Open: ["Assigned", "Cancelled"],
+    Assigned: ["In Progress", "Cancelled", "Open"], // Can unassign
+    "In Progress": ["Resolved", "Cancelled"],
+    Resolved: ["Closed", "Reopened"],
+    Closed: ["Reopened"], // Can only reopen
+    Reopened: ["Assigned", "In Progress", "Cancelled"], // Treated as active
+    Cancelled: [], // Terminal state
+  };
+
+  const allowedStatuses = validTransitions[this.status] || [];
+
+  // Role-based restrictions
+  if (newStatus === "Assigned" && userRole !== "admin") {
+    return false; // Only admin can assign
+  }
+
+  if (newStatus === "Reopened" && userRole !== "resident") {
+    return false; // Only resident can reopen
+  }
+
+  if (newStatus === "Closed" && userRole !== "resident") {
+    return false; // Only resident can close
+  }
+
+  return allowedStatuses.includes(newStatus);
 };
 
 // Static method for dashboard stats

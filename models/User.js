@@ -123,6 +123,18 @@ const userSchema = new mongoose.Schema({
   fcmToken: {
     type: String,
     default: null
+  },
+
+  // Presence tracking
+  isOnline: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  lastSeen: {
+    type: Date,
+    default: Date.now,
+    index: true
   }
 
 }, {

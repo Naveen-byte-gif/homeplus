@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ticket Resolved</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 8px 8px 0 0;
+            margin: -30px -30px 30px -30px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .content {
+            padding: 20px 0;
+        }
+        .ticket-info {
+            background-color: #f8f9fa;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .success-icon {
+            text-align: center;
+            font-size: 64px;
+            margin: 20px 0;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 30px;
+            background-color: #28a745;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 5px;
+            font-weight: bold;
+        }
+        .button:hover {
+            background-color: #218838;
+        }
+        .button-secondary {
+            background-color: #6c757d;
+        }
+        .button-secondary:hover {
+            background-color: #5a6268;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+        }
+        .info-row {
+            margin: 10px 0;
+        }
+        .info-label {
+            font-weight: bold;
+            color: #555;
+        }
+        .resolution-box {
+            background-color: #e8f5e9;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✅ Ticket Resolved</h1>
+        </div>
+        
+        <div class="content">
+            <div class="success-icon">🎉</div>
+            
+            <p>Hello <strong>{{fullName}}</strong>,</p>
+            
+            <p>Great news! Your ticket has been resolved:</p>
+            
+            <div class="ticket-info">
+                <div class="info-row">
+                    <span class="info-label">Ticket Number:</span> {{ticketNumber}}
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Title:</span> {{title}}
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Resolved At:</span> {{resolvedAt}}
+                </div>
+            </div>
+            
+            {{#if resolutionDescription}}
+            <div class="resolution-box">
+                <strong>Resolution Details:</strong>
+                <p>{{resolutionDescription}}</p>
+            </div>
+            {{/if}}
+            
+            <p><strong>Next Steps:</strong></p>
+            <p>Please verify that the issue has been completely resolved. If you're satisfied, you can close the ticket. If the issue persists, you can reopen it.</p>
+            
+            <div style="text-align: center;">
+                <a href="{{complaintUrl}}" class="button">View Ticket</a>
+                <a href="{{ratingUrl}}" class="button button-secondary">Rate Service</a>
+            </div>
+            
+            <p style="margin-top: 30px; font-size: 14px; color: #666;">
+                <em>Your feedback helps us improve our service quality. Please take a moment to rate your experience.</em>
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p>This is an automated email from ApartmentSync.</p>
+            <p>© {{currentYear}} ApartmentSync. All rights reserved.</p>
+            <p>Support: {{supportEmail}}</p>
+        </div>
+    </div>
+</body>
+</html>
+

@@ -33,11 +33,30 @@ const loadEmailTemplate = async (templateName, variables = {}) => {
     const templatePath = path.join(__dirname, '../templates/emails', `${templateName}.html`);
     let template = await fs.readFile(templatePath, 'utf8');
     
-    // Replace variables in template
-    Object.keys(variables).forEach(key => {
+    // Add common variables
+    const allVariables = {
+      ...variables,
+      currentYear: new Date().getFullYear(),
+      supportEmail: process.env.SUPPORT_EMAIL || 'support@apartmentsync.com',
+      frontendUrl: process.env.FRONTEND_URL || 'https://apartmentsync.com',
+    };
+    
+    // Replace variables in template (handle both {{var}} and {{#if var}}...{{/if}} patterns)
+    Object.keys(allVariables).forEach(key => {
+      const value = allVariables[key] || '';
+      // Replace simple variables
       const regex = new RegExp(`{{${key}}}`, 'g');
-      template = template.replace(regex, variables[key]);
+      template = template.replace(regex, String(value));
+      
+      // Handle if conditions (simple implementation)
+      const ifRegex = new RegExp(`{{#if ${key}}}([\\s\\S]*?){{/if}}`, 'g');
+      template = template.replace(ifRegex, (match, content) => {
+        return value ? content : '';
+      });
     });
+    
+    // Clean up any remaining unreplaced variables
+    template = template.replace(/{{[^}]+}}/g, '');
     
     return template;
   } catch (error) {
@@ -181,9 +200,12 @@ const sendComplaintResolvedEmail = async (user, complaint) => {
     fullName: user.fullName,
     ticketNumber: complaint.ticketNumber,
     title: complaint.title,
-    resolvedAt: complaint.resolution.resolvedAt.toLocaleString(),
-    resolutionDescription: complaint.resolution.description,
-    ratingUrl: `${process.env.FRONTEND_URL}/complaints/${complaint._id}/rate`
+    resolvedAt: complaint.resolution?.resolvedAt 
+      ? new Date(complaint.resolution.resolvedAt).toLocaleString()
+      : new Date().toLocaleString(),
+    resolutionDescription: complaint.resolution?.description || 'Issue has been resolved',
+    complaintUrl: `${process.env.FRONTEND_URL || 'https://apartmentsync.com'}/complaints/${complaint._id}`,
+    ratingUrl: `${process.env.FRONTEND_URL || 'https://apartmentsync.com'}/complaints/${complaint._id}/rate`
   };
 
   const html = await loadEmailTemplate(EMAIL_TEMPLATES.COMPLAINT_RESOLVED, templateVars);
