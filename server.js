@@ -27,6 +27,7 @@ const complaintRoutes = require("./routes/complaints");
 const adminRoutes = require("./routes/admin");
 const staffRoutes = require("./routes/staff");
 const noticeRoutes = require("./routes/notices");
+const chatRoutes = require("./routes/chats");
 
 // Import socket service
 const { initializeSocket } = require("./services/socketService");
@@ -134,6 +135,7 @@ app.use("/api/complaints", complaintRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/notices", noticeRoutes);
+app.use("/api/chats", chatRoutes);
 
 // 404 handler
 app.use("*", (req, res) => {
