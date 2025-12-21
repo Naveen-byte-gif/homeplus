@@ -15,6 +15,14 @@ const {
   getBuildingDetails,
   getAvailableFlats
 } = require('../controllers/adminController');
+
+// Import complaint controller for status updates
+const {
+  updateComplaintStatus,
+  closeTicket,
+  cancelTicket,
+  reopenTicket
+} = require('../controllers/complaintController');
 const { protect } = require('../middleware/auth');
 const { requireAdmin } = require('../middleware/roleCheck');
 
@@ -33,6 +41,11 @@ router.put('/users/:userId/approval', updateUserApproval);
 // Complaint management
 router.get('/complaints', getAllComplaints);
 router.put('/complaints/:complaintId/assign', assignComplaintToStaff);
+// Admin status update routes
+router.put('/complaints/:id/status', updateComplaintStatus);
+router.post('/complaints/:id/close', closeTicket);
+router.post('/complaints/:id/cancel', cancelTicket);
+router.post('/complaints/:id/reopen', reopenTicket);
 
 // Staff management
 router.get('/staff', getAllStaff);
