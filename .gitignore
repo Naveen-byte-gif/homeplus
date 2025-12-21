@@ -1,1 +1,18 @@
 /apartmentsync-c3174-firebase-adminsdk-fbsvc-dac1bf241a.json
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# PM2 logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Firebase service account keys
+*firebase*adminsdk*.json
+firebase-service-account.json
+serviceAccountKey.json
