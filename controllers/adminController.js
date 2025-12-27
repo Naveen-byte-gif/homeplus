@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const User = require("../models/User");
 const Complaint = require("../models/Complaint");
 const Staff = require("../models/Staff");
@@ -11,24 +12,51 @@ const { emitToUser, emitToRoom } = require("../services/socketService");
 const getAllBuildings = async (req, res) => {
   try {
     const adminId = req.user.id;
+    console.log("🏢 [ADMIN] Get all buildings request");
+    console.log("🏢 [ADMIN] Admin ID:", adminId, "Type:", typeof adminId);
+    
     const admin = await User.findById(adminId);
 
     if (!admin) {
+      console.log("❌ [ADMIN] Admin not found");
       return res.status(404).json({
         success: false,
         message: "Admin not found",
       });
     }
 
+    console.log("✅ [ADMIN] Admin found:", admin.fullName, "Role:", admin.role);
+
+    // Ensure adminId is ObjectId for proper query
+    // adminId from req.user.id should already be ObjectId, but ensure it's properly formatted
+    let adminObjectId = adminId;
+    
+    // Convert to ObjectId if it's a string
+    if (typeof adminId === 'string' && mongoose.Types.ObjectId.isValid(adminId)) {
+      adminObjectId = new mongoose.Types.ObjectId(adminId);
+    } else if (adminId && adminId.toString) {
+      // If it's already an ObjectId, use it as is
+      adminObjectId = adminId;
+    }
+
+    console.log("🔍 [ADMIN] Querying buildings for admin:", adminObjectId);
+
     // Get all buildings created by this admin
     const buildings = await Apartment.find({
-      createdBy: adminId,
+      createdBy: adminObjectId,
       isActive: true,
     })
       .select(
-        "name code address buildingCategory buildingType configuration.totalFloors configuration.flatsPerFloor createdAt"
+        "name code address buildingCategory buildingType configuration.totalFloors configuration.flatsPerFloor createdAt createdBy"
       )
       .sort({ createdAt: -1 });
+
+    console.log(`✅ [ADMIN] Found ${buildings.length} buildings for admin ${adminId}`);
+    
+    // Log building details for debugging
+    buildings.forEach((building, index) => {
+      console.log(`  Building ${index + 1}: ${building.name} (${building.code}) - CreatedBy: ${building.createdBy}`);
+    });
 
     // Get statistics for each building
     const buildingsWithStats = await Promise.all(
@@ -667,30 +695,53 @@ const assignComplaintToStaff = async (req, res) => {
 const getAllStaff = async (req, res) => {
   try {
     const adminId = req.user.id;
+    console.log("👥 [ADMIN] Get all staff request");
+    console.log("👥 [ADMIN] Admin ID:", adminId);
 
-    // Get admin's apartment code
+    // Get admin
     const admin = await User.findById(adminId);
     if (!admin) {
+      console.log("❌ [ADMIN] Admin not found");
       return res.status(404).json({
         success: false,
         message: "Admin not found",
       });
     }
 
+    // Get all buildings created by this admin
+    const buildings = await Apartment.find({
+      createdBy: adminId,
+      isActive: true,
+    }).select("code");
+
+    const buildingCodes = buildings.map((b) => b.code);
+    console.log(`✅ [ADMIN] Found ${buildingCodes.length} buildings:`, buildingCodes);
+
+    if (buildingCodes.length === 0) {
+      console.log("ℹ️ [ADMIN] No buildings found for admin");
+      return res.status(200).json({
+        success: true,
+        data: { staff: [] },
+      });
+    }
+
+    // Get all staff from admin's buildings
     const staff = await Staff.find()
       .populate({
         path: "user",
-        match: { apartmentCode: admin.apartmentCode },
-        select: "fullName phoneNumber email profilePicture",
+        match: { apartmentCode: { $in: buildingCodes } },
+        select: "fullName phoneNumber email profilePicture apartmentCode",
       })
       .then((staff) => staff.filter((s) => s.user)); // Filter by apartment
+
+    console.log(`✅ [ADMIN] Found ${staff.length} staff members`);
 
     res.status(200).json({
       success: true,
       data: { staff },
     });
   } catch (error) {
-    console.error("Get all staff error:", error);
+    console.error("❌ [ADMIN] Get all staff error:", error);
     res.status(500).json({
       success: false,
       message: "Error fetching staff members",
@@ -717,7 +768,9 @@ const createBuilding = async (req, res) => {
       });
     }
 
-    // Allow multiple buildings per admin - no restriction
+    // Support multiple admins: Each admin can create multiple buildings
+    // Buildings are linked to admins via createdBy field
+    // No restriction on number of buildings per admin
 
     const {
       name,
@@ -877,12 +930,31 @@ const createBuilding = async (req, res) => {
     });
 
     console.log(`✅ [ADMIN] Building created: ${building._id}`);
+    console.log(`✅ [ADMIN] Building createdBy: ${building.createdBy} (Type: ${typeof building.createdBy})`);
+    console.log(`✅ [ADMIN] Admin ID: ${adminId} (Type: ${typeof adminId})`);
 
     // Activate admin account if not already active
+    // Also set apartmentCode to first building if not already set
+    let adminUpdated = false;
     if (admin.status !== "active") {
       admin.status = "active";
-      await admin.save();
+      adminUpdated = true;
       console.log(`✅ [ADMIN] Admin account activated`);
+    }
+
+    // Set admin's apartmentCode to this building if they don't have one yet
+    // This helps with operations that reference admin.apartmentCode
+    // Note: Admins can create multiple buildings, but we set apartmentCode to their first building
+    if (!admin.apartmentCode) {
+      admin.apartmentCode = building.code.toUpperCase();
+      adminUpdated = true;
+      console.log(`✅ [ADMIN] Set admin apartmentCode to: ${building.code}`);
+    }
+
+    // Save admin if any updates were made
+    if (adminUpdated) {
+      await admin.save();
+      console.log(`✅ [ADMIN] Admin profile updated`);
     }
 
     console.log("📡 [ADMIN] Emitting real-time events for building creation");

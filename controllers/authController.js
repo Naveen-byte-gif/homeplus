@@ -2,7 +2,7 @@
   const OTP = require('../models/OTP');
   const Apartment = require('../models/Apartment');
   const { generateToken } = require('../middleware/auth');
-  // const { sendOTP } = require('../services/smsService');
+  const { sendOTP: sendSMSOTP } = require('../services/smsService');
   const { emitToUser } = require('../services/socketService');
 
   // @desc    Send OTP for registration/login
@@ -42,6 +42,20 @@
         console.log('✅ [AUTH] User does not exist - can register');
       }
 
+      // Check if admin already exists for admin registration
+      if (purpose === 'admin_registration') {
+        console.log('🔍 [AUTH] Checking for existing admin (admin_registration)...');
+        const existingAdmin = await User.findOne({ phoneNumber, role: 'admin' });
+        if (existingAdmin) {
+          console.log('❌ [AUTH] Admin already exists');
+          return res.status(409).json({
+            success: false,
+            message: 'Admin already exists with this phone number'
+          });
+        }
+        console.log('✅ [AUTH] Admin does not exist - can register');
+      }
+
       // Check if user exists for login
       if (purpose === 'login') {
         console.log('🔍 [AUTH] Checking for existing user (login)...');
@@ -61,12 +75,26 @@
       const otpRecord = await OTP.generateOTP(phoneNumber, purpose);
       console.log(`✅ [AUTH] OTP generated: ${otpRecord.otp}`);
 
-      // Send OTP via SMS (in production)
-      if (process.env.NODE_ENV === 'production') {
-        console.log('📲 [AUTH] Sending OTP via SMS...');
-        await sendOTP(phoneNumber, otpRecord.otp);
+      // Send OTP via SMS
+      console.log('📲 [AUTH] Sending OTP via SMS...');
+      const smsResult = await sendSMSOTP(phoneNumber, otpRecord.otp);
+      
+      if (!smsResult.success) {
+        console.warn('⚠️ [AUTH] SMS sending failed, but OTP is still valid:', smsResult.message);
+        // Don't fail the request if SMS fails - OTP is still generated and can be verified
+        // In development, we log the OTP anyway
+        // If it's a trial account verification issue, include OTP in the message
+        if (smsResult.error && smsResult.error.includes('unverified')) {
+          console.log(`📲 [AUTH] ⚠️ Trial account: Phone number needs verification. OTP code: ${otpRecord.otp}`);
+          console.log(`📲 [AUTH] Verify at: https://console.twilio.com/us1/develop/phone-numbers/manage/verified`);
+        }
       } else {
-        console.log(`📲 [AUTH] OTP for ${phoneNumber}: ${otpRecord.otp}`); // For development
+        console.log('✅ [AUTH] SMS sent successfully:', smsResult.message);
+      }
+      
+      // In development, always log the OTP for testing
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`📲 [AUTH] OTP for ${phoneNumber}: ${otpRecord.otp}`);
       }
 
       console.log('✅ [AUTH] OTP sent successfully');
@@ -917,22 +945,22 @@
     }
   };
 
-  // @desc    Admin register
-  // @route   POST /api/auth/admin/register
+  // @desc    Verify OTP and register admin
+  // @route   POST /api/auth/admin/verify-otp-register
   // @access  Public
-  const adminRegister = async (req, res) => {
+  const verifyOTPAndAdminRegister = async (req, res) => {
     try {
-      console.log('👔 [AUTH] Admin Register request received');
-      console.log('👔 [AUTH] Request body:', JSON.stringify({ ...req.body, password: '***' }, null, 2));
+      console.log('👔 [AUTH] Admin Register with OTP request received');
+      console.log('👔 [AUTH] Request body:', JSON.stringify({ ...req.body, password: '***', otp: '***' }, null, 2));
       
-      const { phoneNumber, password, fullName, email } = req.body;
+      const { phoneNumber, password, fullName, email, otp } = req.body;
 
       // Validate required fields
-      if (!phoneNumber || !password || !fullName) {
+      if (!phoneNumber || !password || !fullName || !otp) {
         console.log('❌ [AUTH] Missing required fields');
         return res.status(400).json({
           success: false,
-          message: 'Phone number, password, and full name are required'
+          message: 'Phone number, password, full name, and OTP are required'
         });
       }
 
@@ -945,6 +973,19 @@
           message: 'Please provide a valid Indian phone number'
         });
       }
+
+      // Verify OTP
+      console.log('🔐 [AUTH] Verifying OTP...');
+      const otpVerification = await OTP.verifyOTP(phoneNumber, otp, 'admin_registration');
+      
+      if (!otpVerification.isValid) {
+        console.log('❌ [AUTH] OTP verification failed:', otpVerification.message);
+        return res.status(400).json({
+          success: false,
+          message: otpVerification.message
+        });
+      }
+      console.log('✅ [AUTH] OTP verified successfully');
 
       // Check if admin already exists
       console.log('🔍 [AUTH] Checking for existing admin...');
@@ -1033,6 +1074,17 @@
     }
   };
 
+  // @desc    Admin register (deprecated - use verifyOTPAndAdminRegister)
+  // @route   POST /api/auth/admin/register
+  // @access  Public
+  const adminRegister = async (req, res) => {
+    // Redirect to OTP-based registration
+    return res.status(400).json({
+      success: false,
+      message: 'Please use OTP verification for admin registration. Send OTP first, then verify and register.'
+    });
+  };
+
   module.exports = {
     sendOTP,
     verifyOTPAndRegister,
@@ -1040,5 +1092,6 @@
     passwordLogin,
     getMe,
     adminLogin,
-    adminRegister
+    adminRegister,
+    verifyOTPAndAdminRegister
   };

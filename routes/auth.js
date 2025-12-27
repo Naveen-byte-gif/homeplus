@@ -10,7 +10,8 @@ const {
   passwordLogin,
   getMe,
   adminLogin,
-  adminRegister
+  adminRegister,
+  verifyOTPAndAdminRegister
 } = require('../controllers/authController');
 
 // Debug each route
@@ -49,6 +50,11 @@ router.post('/admin/register', (req, res, next) => {
   console.log('👔 Admin Register route hit');
   next();
 }, adminRegister);
+
+router.post('/admin/verify-otp-register', (req, res, next) => {
+  console.log('👔 Admin Verify OTP Register route hit');
+  next();
+}, verifyOTPAndAdminRegister);
 
 console.log('✅ Auth routes loaded successfully');
 
