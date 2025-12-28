@@ -32,7 +32,6 @@ const chatRoutes = require("./routes/chats");
 // Import socket service
 const { initializeSocket } = require("./services/socketService");
 
-// Initialize express app
 const app = express();
 const server = http.createServer(app);
 
