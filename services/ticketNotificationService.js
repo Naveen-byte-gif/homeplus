@@ -148,7 +148,7 @@ const notifyTicketAssigned = async (complaint, staffId, assignedBy) => {
         creator.fcmToken,
         {
           title: 'Ticket Assigned',
-          body: `Ticket ${complaint.ticketNumber} assigned to ${staff.user.fullName}`,
+          body: `Your complaint has been updated 👍\nWe're actively working on it.\n\nAssigned to: ${staff.user.fullName}`,
         },
         notificationData
       );
@@ -242,10 +242,8 @@ const notifyStatusUpdate = async (complaint, oldStatus, newStatus, updatedBy, op
     console.log(`✅ [NOTIFICATION] Status update notification sent to resident ${creator._id.toString()}`);
 
     if (creator.fcmToken && creator.notificationPreferences?.push) {
-      // Enhanced notification body with location
-      const notificationBody = updatedBy === complaint.createdBy.toString()
-        ? `Your ticket ${complaint.ticketNumber} status changed to ${newStatus}`
-        : `Ticket ${complaint.ticketNumber} status changed to ${newStatus} by ${updatedByName}`;
+      // Enhanced notification body with friendly tone as requested
+      const notificationBody = `Your complaint has been updated 👍\nWe're actively working on it.\n\nStatus: ${newStatus}`;
 
       await sendPushNotification(
         creator.fcmToken,
@@ -342,7 +340,7 @@ const notifyCommentAdded = async (complaint, comment, postedBy) => {
           creator.fcmToken,
           {
             title: 'New Comment',
-            body: `${commenter.fullName}: ${comment.text.substring(0, 50)}...`,
+            body: `Your complaint has been updated 👍\n${commenter.fullName} replied to your complaint.\nWe're actively working on it.`,
           },
           notificationData
         );
@@ -451,7 +449,7 @@ const notifyTicketResolved = async (complaint, resolvedBy) => {
         creator.fcmToken,
         {
           title: 'Ticket Resolved',
-          body: `Ticket ${complaint.ticketNumber} has been resolved. Please verify and close.`,
+          body: `Your complaint has been updated 👍\nIssue resolved! Please verify and close.\nWe're actively working on it.`,
         },
         notificationData
       );

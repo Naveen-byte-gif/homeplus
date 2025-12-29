@@ -1,9 +1,33 @@
 const twilio = require('twilio');
 
-// Initialize Twilio client
-const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN 
-  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
-  : null;
+// Initialize Twilio client with proper validation
+let twilioClient = null;
+
+try {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
+  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+  
+  // Validate that credentials exist and accountSid starts with "AC" (required by Twilio)
+  if (accountSid && authToken && accountSid.startsWith('AC')) {
+    twilioClient = twilio(accountSid, authToken);
+  } else if (accountSid || authToken) {
+    // Credentials exist but are invalid
+    console.warn('⚠️ [SMS] Invalid Twilio credentials detected');
+    if (accountSid && !accountSid.startsWith('AC')) {
+      console.warn(`   - TWILIO_ACCOUNT_SID must start with "AC", got: ${accountSid.substring(0, 3)}...`);
+    }
+    if (!accountSid) {
+      console.warn('   - TWILIO_ACCOUNT_SID is empty or missing');
+    }
+    if (!authToken) {
+      console.warn('   - TWILIO_AUTH_TOKEN is empty or missing');
+    }
+  }
+} catch (error) {
+  console.error('❌ [SMS] Error initializing Twilio client:', error.message);
+  console.warn('⚠️ [SMS] Twilio SMS service will be disabled');
+  twilioClient = null;
+}
 
 // Log Twilio configuration status on startup
 if (twilioClient && process.env.TWILIO_PHONE_NUMBER) {

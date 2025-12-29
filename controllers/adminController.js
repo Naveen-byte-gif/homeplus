@@ -460,6 +460,7 @@ const getAllComplaints = async (req, res) => {
       priority,
       wing,
       buildingCode,
+      createdBy, // Optional: Filter by specific resident ID
     } = req.query;
 
     // Get admin user
@@ -523,7 +524,31 @@ const getAllComplaints = async (req, res) => {
 
     // Get users from the admin's buildings
     const apartmentUsers = await User.find(userFilter).select("_id");
-    const userIds = apartmentUsers.map((user) => user._id);
+    let userIds = apartmentUsers.map((user) => user._id);
+
+    // If createdBy is specified, filter to that specific user (if they belong to admin's buildings)
+    if (createdBy) {
+      // Convert userIds to strings for comparison
+      const userIdStrings = userIds.map(id => id.toString());
+      if (userIdStrings.includes(createdBy)) {
+        // The specified user belongs to admin's buildings, filter to just that user
+        userIds = [createdBy];
+      } else {
+        // The specified user doesn't belong to admin's buildings, return empty
+        return res.status(200).json({
+          success: true,
+          data: {
+            complaints: [],
+            pagination: {
+              page: parseInt(page),
+              limit: parseInt(limit),
+              total: 0,
+              pages: 0,
+            },
+          },
+        });
+      }
+    }
 
     if (userIds.length === 0) {
       // No users found in admin's buildings
@@ -1461,6 +1486,235 @@ const getAllUsers = async (req, res) => {
   }
 };
 
+// @desc    Get residents with advanced filtering and risk detection
+// @route   GET /api/admin/residents
+// @access  Private (Admin)
+const getResidentsAdvanced = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const {
+      buildingCode,
+      search,
+      status,
+      floor,
+      paymentStatus,
+      complaintStatus,
+      verificationStatus,
+      riskLevel,
+      page = 1,
+      limit = 50,
+    } = req.query;
+
+    const admin = await User.findById(adminId);
+    if (!admin || admin.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    // Build filter
+    let apartmentCode = buildingCode;
+    let filter = { role: "resident" };
+
+    // Building filter
+    if (apartmentCode) {
+      const building = await Apartment.findOne({
+        code: apartmentCode,
+        createdBy: adminId,
+        isActive: true,
+      });
+      if (!building) {
+        return res.status(404).json({
+          success: false,
+          message: "Building not found or access denied",
+        });
+      }
+      filter.apartmentCode = apartmentCode;
+    } else {
+      const adminBuildings = await Apartment.find({
+        createdBy: adminId,
+        isActive: true,
+      }).select("code");
+      const buildingCodes = adminBuildings.map((b) => b.code);
+      if (buildingCodes.length > 0) {
+        filter.apartmentCode = { $in: buildingCodes };
+      } else {
+        return res.status(200).json({
+          success: true,
+          data: { residents: [], total: 0, statistics: {} },
+        });
+      }
+    }
+
+    // Status filter
+    if (status) filter.status = status;
+
+    // Floor filter
+    if (floor) filter.floorNumber = parseInt(floor);
+
+    // Search filter
+    if (search) {
+      filter.$or = [
+        { fullName: { $regex: search, $options: "i" } },
+        { phoneNumber: { $regex: search, $options: "i" } },
+        { flatNumber: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    // Get residents
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const residents = await User.find(filter)
+      .select("-password")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    // Get complaints for risk detection
+    const Complaint = require("../models/Complaint");
+    const residentIds = residents.map((r) => r._id);
+    const activeComplaints = await Complaint.find({
+      createdBy: { $in: residentIds },
+      status: { $in: ["Open", "Assigned", "In Progress", "Reopened"] },
+    }).populate("createdBy", "fullName");
+
+    // Build complaints map
+    const complaintsMap = {};
+    activeComplaints.forEach((c) => {
+      const userId = c.createdBy._id.toString();
+      if (!complaintsMap[userId]) {
+        complaintsMap[userId] = [];
+      }
+      complaintsMap[userId].push({
+        id: c._id,
+        status: c.status,
+        priority: c.priority,
+        category: c.category,
+      });
+    });
+
+    // Enhance residents with risk data
+    const enhancedResidents = residents.map((resident) => {
+      const residentObj = resident.toObject();
+      const complaints = complaintsMap[resident._id.toString()] || [];
+      const hasActiveComplaints = complaints.length > 0;
+      const hasHighPriorityComplaints = complaints.some(
+        (c) => c.priority === "High" || c.priority === "Emergency"
+      );
+
+      // Calculate risk level
+      let riskLevel = "low";
+      const riskFactors = [];
+
+      if (resident.status === "pending") riskFactors.push("pending_approval");
+      if (resident.status === "suspended") riskFactors.push("suspended");
+      if (hasActiveComplaints) riskFactors.push("active_complaints");
+      if (hasHighPriorityComplaints) riskFactors.push("high_priority_complaints");
+      // TODO: Add payment overdue detection when Payment model is implemented
+      // if (hasOverduePayments) riskFactors.push("overdue_payments");
+
+      if (riskFactors.length >= 3) riskLevel = "high";
+      else if (riskFactors.length >= 1) riskLevel = "medium";
+
+      return {
+        ...residentObj,
+        complaints: complaints,
+        complaintsCount: complaints.length,
+        hasActiveComplaints: hasActiveComplaints,
+        riskLevel: riskLevel,
+        riskFactors: riskFactors,
+        paymentStatus: "paid", // TODO: Implement payment status
+        hasPendingDues: false, // TODO: Implement payment tracking
+      };
+    });
+
+    // Apply additional filters
+    let filteredResidents = enhancedResidents;
+    if (complaintStatus === "active") {
+      filteredResidents = filteredResidents.filter((r) => r.hasActiveComplaints);
+    }
+    if (riskLevel) {
+      filteredResidents = filteredResidents.filter((r) => r.riskLevel === riskLevel);
+    }
+    if (verificationStatus) {
+      if (verificationStatus === "pending") {
+        filteredResidents = filteredResidents.filter((r) => r.status === "pending");
+      } else if (verificationStatus === "approved") {
+        filteredResidents = filteredResidents.filter((r) => r.status === "active");
+      } else if (verificationStatus === "rejected") {
+        filteredResidents = filteredResidents.filter((r) => r.status === "rejected");
+      }
+    }
+
+    // Get statistics
+    const totalResidents = await User.countDocuments({ ...filter, role: "resident" });
+    const pendingCount = await User.countDocuments({
+      ...filter,
+      role: "resident",
+      status: "pending",
+    });
+    const activeCount = await User.countDocuments({
+      ...filter,
+      role: "resident",
+      status: "active",
+    });
+    const suspendedCount = await User.countDocuments({
+      ...filter,
+      role: "resident",
+      status: "suspended",
+    });
+
+    // Count high-risk residents
+    const allResidentsForStats = await User.find({
+      ...filter,
+      role: "resident",
+    }).select("_id status");
+    const allResidentIds = allResidentsForStats.map((r) => r._id);
+    const allComplaints = await Complaint.find({
+      createdBy: { $in: allResidentIds },
+      status: { $in: ["Open", "Assigned", "In Progress"] },
+    });
+    const highRiskCount = allResidentsForStats.filter((r) => {
+      const residentComplaints = allComplaints.filter(
+        (c) => c.createdBy.toString() === r._id.toString()
+      );
+      return (
+        r.status === "pending" ||
+        r.status === "suspended" ||
+        residentComplaints.length >= 2
+      );
+    }).length;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        residents: filteredResidents,
+        total: filteredResidents.length,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: totalResidents,
+          pages: Math.ceil(totalResidents / parseInt(limit)),
+        },
+        statistics: {
+          total: totalResidents,
+          pending: pendingCount,
+          active: activeCount,
+          suspended: suspendedCount,
+          highRisk: highRiskCount,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("❌ [ADMIN] Get residents advanced error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching residents",
+    });
+  }
+};
+
 // @desc    Get building details with floors and flats - Admin only
 // @route   GET /api/admin/building-details
 // @access  Private (Admin)
@@ -1515,10 +1769,11 @@ const getBuildingDetails = async (req, res) => {
       apartmentCode: apartmentCode,
       role: "resident",
       status: "active",
-    }).select("floorNumber flatNumber flatType fullName phoneNumber");
+    }).select("floorNumber flatNumber flatType fullName phoneNumber _id");
 
     // Map occupied flats for quick lookup
     const occupiedMap = {};
+    const userIdMap = {};
     occupiedFlats.forEach((user) => {
       const key = `${user.floorNumber}-${user.flatNumber}`;
       occupiedMap[key] = {
@@ -1527,19 +1782,63 @@ const getBuildingDetails = async (req, res) => {
         phoneNumber: user.phoneNumber,
         flatType: user.flatType,
       };
+      userIdMap[user._id.toString()] = key;
     });
 
-    // Enhance floors with occupancy info
+    // Get active complaints for flats
+    const activeComplaints = await Complaint.find({
+      status: { $in: ["Open", "Assigned", "In Progress", "Reopened"] },
+    })
+      .populate("createdBy", "floorNumber flatNumber apartmentCode")
+      .select("status priority category location createdBy");
+
+    // Map complaints by flat
+    const complaintsMap = {};
+    activeComplaints.forEach((complaint) => {
+      if (complaint.createdBy && complaint.createdBy.apartmentCode === apartmentCode) {
+        const key = `${complaint.createdBy.floorNumber}-${complaint.createdBy.flatNumber}`;
+        if (!complaintsMap[key]) {
+          complaintsMap[key] = [];
+        }
+        complaintsMap[key].push({
+          id: complaint._id,
+          status: complaint.status,
+          priority: complaint.priority,
+          category: complaint.category,
+        });
+      }
+    });
+
+    // Enhance floors with occupancy info, complaints, and status
     const floorsWithDetails = building.configuration.floors.map((floor) => ({
       floorNumber: floor.floorNumber,
       flats: floor.flats.map((flat) => {
         const key = `${floor.floorNumber}-${flat.flatNumber}`;
+        const isOccupied = flat.isOccupied || occupiedMap[key] != null;
+        const flatComplaints = complaintsMap[key] || [];
+        const hasActiveComplaints = flatComplaints.length > 0;
+        const hasPendingDues = false; // TODO: Implement payment tracking
+        
+        // Determine flat status
+        let status = isOccupied ? "occupied" : "vacant";
+        if (hasActiveComplaints) {
+          status = "has_complaints";
+        }
+        if (hasPendingDues) {
+          status = "pending_dues";
+        }
+
         return {
           flatNumber: flat.flatNumber,
+          flatCode: flat.flatCode,
           flatType: flat.flatType,
           squareFeet: flat.squareFeet,
-          isOccupied: flat.isOccupied || occupiedMap[key] != null,
+          isOccupied: isOccupied,
           occupiedBy: occupiedMap[key] || null,
+          status: status,
+          complaints: flatComplaints,
+          hasPendingDues: hasPendingDues,
+          complaintsCount: flatComplaints.length,
         };
       }),
     }));
@@ -1551,6 +1850,21 @@ const getBuildingDetails = async (req, res) => {
     const vacantCount = totalFlats - occupiedCount;
     const occupancyRate =
       totalFlats > 0 ? ((occupiedCount / totalFlats) * 100).toFixed(2) : 0;
+
+    // Count flats by status
+    let occupiedFlatsCount = 0;
+    let vacantFlatsCount = 0;
+    let complaintsFlatsCount = 0;
+    let pendingDuesCount = 0;
+
+    floorsWithDetails.forEach((floor) => {
+      floor.flats.forEach((flat) => {
+        if (flat.status === "occupied") occupiedFlatsCount++;
+        else if (flat.status === "vacant") vacantFlatsCount++;
+        else if (flat.status === "has_complaints") complaintsFlatsCount++;
+        else if (flat.status === "pending_dues") pendingDuesCount++;
+      });
+    });
 
     res.status(200).json({
       success: true,
@@ -1586,6 +1900,8 @@ const getBuildingDetails = async (req, res) => {
             role: "staff",
             status: "active",
           }),
+          flatsWithComplaints: complaintsFlatsCount,
+          flatsWithPendingDues: pendingDuesCount,
         },
       },
     });
@@ -1692,6 +2008,382 @@ const getAvailableFlats = async (req, res) => {
   }
 };
 
+// @desc    Get building view with role-based filtering (Admin/Resident/Staff)
+// @route   GET /api/admin/building-view
+// @access  Private (Admin/Resident/Staff)
+const getBuildingView = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId);
+    const { buildingCode } = req.query;
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    let apartmentCode = buildingCode || user.apartmentCode;
+    if (!apartmentCode) {
+      return res.status(404).json({
+        success: false,
+        message: "Building not found",
+      });
+    }
+
+    // Get building
+    let building;
+    if (user.role === "admin") {
+      building = await Apartment.findOne({
+        code: apartmentCode,
+        createdBy: userId,
+        isActive: true,
+      });
+    } else {
+      building = await Apartment.findByCode(apartmentCode);
+    }
+
+    if (!building) {
+      return res.status(404).json({
+        success: false,
+        message: "Building not found",
+      });
+    }
+
+    // Get occupied flats
+    const occupiedFlats = await User.find({
+      apartmentCode: apartmentCode,
+      role: "resident",
+      status: "active",
+    }).select("floorNumber flatNumber flatType fullName phoneNumber _id");
+
+    // Map occupied flats
+    const occupiedMap = {};
+    occupiedFlats.forEach((u) => {
+      const key = `${u.floorNumber}-${u.flatNumber}`;
+      occupiedMap[key] = {
+        userId: u._id,
+        fullName: u.fullName,
+        phoneNumber: u.phoneNumber,
+        flatType: u.flatType,
+      };
+    });
+
+    // Get active complaints
+    const activeComplaints = await Complaint.find({
+      status: { $in: ["Open", "Assigned", "In Progress", "Reopened"] },
+    })
+      .populate("createdBy", "floorNumber flatNumber apartmentCode")
+      .select("status priority category location createdBy");
+
+    const complaintsMap = {};
+    activeComplaints.forEach((c) => {
+      if (c.createdBy && c.createdBy.apartmentCode === apartmentCode) {
+        const key = `${c.createdBy.floorNumber}-${c.createdBy.flatNumber}`;
+        if (!complaintsMap[key]) complaintsMap[key] = [];
+        complaintsMap[key].push({
+          id: c._id,
+          status: c.status,
+          priority: c.priority,
+          category: c.category,
+        });
+      }
+    });
+
+    // Role-based filtering
+    let filteredFloors = building.configuration.floors;
+    if (user.role === "resident") {
+      // Resident: Only show their flat
+      filteredFloors = building.configuration.floors
+        .filter((f) => f.floorNumber === user.floorNumber)
+        .map((f) => ({
+          ...f,
+          flats: f.flats.filter((flat) => flat.flatNumber === user.flatNumber),
+        }));
+    } else if (user.role === "staff") {
+      // Staff: Show flats with assigned complaints
+      const Staff = require("../models/Staff");
+      const staff = await Staff.findOne({ user: userId }).populate("user");
+      if (staff) {
+        const assignedComplaints = await Complaint.find({
+          "assignedTo.staff": staff._id,
+          status: { $in: ["Assigned", "In Progress"] },
+        })
+          .populate("createdBy", "floorNumber flatNumber apartmentCode")
+          .select("createdBy");
+
+        const assignedFlats = new Set();
+        assignedComplaints.forEach((c) => {
+          if (c.createdBy && c.createdBy.apartmentCode === apartmentCode) {
+            assignedFlats.add(`${c.createdBy.floorNumber}-${c.createdBy.flatNumber}`);
+          }
+        });
+
+        filteredFloors = building.configuration.floors.map((f) => ({
+          ...f,
+          flats: f.flats.filter((flat) => {
+            const key = `${f.floorNumber}-${flat.flatNumber}`;
+            return assignedFlats.has(key);
+          }),
+        }));
+      }
+    }
+
+    // Enhance floors with status
+    const floorsWithDetails = filteredFloors.map((floor) => ({
+      floorNumber: floor.floorNumber,
+      flats: floor.flats.map((flat) => {
+        const key = `${floor.floorNumber}-${flat.flatNumber}`;
+        const isOccupied = flat.isOccupied || occupiedMap[key] != null;
+        const flatComplaints = complaintsMap[key] || [];
+        const hasActiveComplaints = flatComplaints.length > 0;
+        const hasPendingDues = false; // TODO: Implement payment tracking
+
+        let status = isOccupied ? "occupied" : "vacant";
+        if (hasActiveComplaints) status = "has_complaints";
+        if (hasPendingDues) status = "pending_dues";
+
+        return {
+          flatNumber: flat.flatNumber,
+          flatCode: flat.flatCode,
+          flatType: flat.flatType,
+          squareFeet: flat.squareFeet,
+          isOccupied: isOccupied,
+          occupiedBy: occupiedMap[key] || null,
+          status: status,
+          complaints: flatComplaints,
+          hasPendingDues: hasPendingDues,
+          complaintsCount: flatComplaints.length,
+        };
+      }),
+    }));
+
+    // Calculate statistics
+    const totalFlats =
+      building.configuration.totalFloors * building.configuration.flatsPerFloor;
+    const occupiedCount = occupiedFlats.length;
+    const vacantCount = totalFlats - occupiedCount;
+    const occupancyRate =
+      totalFlats > 0 ? ((occupiedCount / totalFlats) * 100).toFixed(2) : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        building: {
+          id: building._id,
+          name: building.name,
+          code: building.code,
+          address: building.address,
+          totalFloors: building.configuration.totalFloors,
+          flatsPerFloor: building.configuration.flatsPerFloor,
+          totalFlats: totalFlats,
+          floors: floorsWithDetails,
+        },
+        statistics: {
+          totalFlats: totalFlats,
+          occupiedFlats: occupiedCount,
+          vacantFlats: vacantCount,
+          occupancyRate: parseFloat(occupancyRate),
+        },
+        userRole: user.role,
+      },
+    });
+  } catch (error) {
+    console.error("❌ [BUILDING VIEW] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching building view",
+    });
+  }
+};
+
+// @desc    Bulk operations on residents
+// @route   POST /api/admin/residents/bulk-action
+// @access  Private (Admin)
+const bulkResidentAction = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const { action, residentIds, reason } = req.body;
+
+    const admin = await User.findById(adminId);
+    if (!admin || admin.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (!action || !residentIds || !Array.isArray(residentIds) || residentIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Action and resident IDs are required",
+      });
+    }
+
+    const validActions = [
+      "approve",
+      "reject",
+      "suspend",
+      "activate",
+      "send_reminder",
+      "assign_notice",
+    ];
+
+    if (!validActions.includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid action. Valid actions: ${validActions.join(", ")}`,
+      });
+    }
+
+    // Get residents
+    const residents = await User.find({
+      _id: { $in: residentIds },
+      role: "resident",
+    });
+
+    if (residents.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No residents found",
+      });
+    }
+
+    // Verify all residents belong to admin's buildings
+    const adminBuildings = await Apartment.find({
+      createdBy: adminId,
+      isActive: true,
+    }).select("code");
+    const buildingCodes = adminBuildings.map((b) => b.code);
+
+    const unauthorizedResidents = residents.filter(
+      (r) => !buildingCodes.includes(r.apartmentCode)
+    );
+
+    if (unauthorizedResidents.length > 0) {
+      return res.status(403).json({
+        success: false,
+        message: "Some residents do not belong to your buildings",
+      });
+    }
+
+    const results = {
+      success: [],
+      failed: [],
+    };
+
+    // Perform bulk action
+    for (const resident of residents) {
+      try {
+        let updateData = {};
+        let description = "";
+
+        switch (action) {
+          case "approve":
+            updateData = { status: "active", isVerified: true };
+            description = `Bulk approved by ${admin.fullName}`;
+            break;
+          case "reject":
+            updateData = { status: "rejected" };
+            description = `Bulk rejected by ${admin.fullName}${reason ? `: ${reason}` : ""}`;
+            break;
+          case "suspend":
+            updateData = { status: "suspended" };
+            description = `Bulk suspended by ${admin.fullName}${reason ? `: ${reason}` : ""}`;
+            break;
+          case "activate":
+            updateData = { status: "active" };
+            description = `Bulk activated by ${admin.fullName}`;
+            break;
+          case "send_reminder":
+            // TODO: Implement payment reminder sending
+            description = `Payment reminder sent by ${admin.fullName}`;
+            break;
+          case "assign_notice":
+            // TODO: Implement notice assignment
+            description = `Notice assigned by ${admin.fullName}`;
+            break;
+        }
+
+        if (Object.keys(updateData).length > 0) {
+          await User.findByIdAndUpdate(resident._id, updateData);
+        }
+
+        // Create audit log
+        const AuditLog = require("../models/AuditLog");
+        const auditActionMap = {
+          approve: "USER_APPROVED",
+          reject: "USER_REJECTED",
+          suspend: "USER_SUSPENDED",
+          activate: "USER_ACTIVATED",
+          send_reminder: "ADMIN_ACTION",
+          assign_notice: "ADMIN_ACTION",
+        };
+        await AuditLog.create({
+          action: auditActionMap[action] || "ADMIN_ACTION",
+          description: `${description} - Resident: ${resident.fullName} (${resident.flatNumber})`,
+          performedBy: adminId,
+          targetEntity: "User",
+          targetEntityId: resident._id,
+          metadata: {
+            action: action,
+            reason: reason || null,
+            bulkOperation: true,
+            totalAffected: residentIds.length,
+          },
+        });
+
+        // Emit real-time event
+        emitToUser(resident._id.toString(), "resident_status_updated", {
+          message: `Your account has been ${action}ed`,
+          action: action,
+          updatedBy: admin.fullName,
+        });
+
+        results.success.push({
+          id: resident._id,
+          name: resident.fullName,
+          flatNumber: resident.flatNumber,
+        });
+      } catch (error) {
+        console.error(`Error processing resident ${resident._id}:`, error);
+        results.failed.push({
+          id: resident._id,
+          name: resident.fullName,
+          error: error.message,
+        });
+      }
+    }
+
+    // Broadcast to admin room
+    emitToRoom("admin", "bulk_resident_action", {
+      action: action,
+      totalAffected: results.success.length,
+      performedBy: adminId,
+      timestamp: new Date(),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Bulk action completed: ${results.success.length} succeeded, ${results.failed.length} failed`,
+      data: {
+        action: action,
+        total: residentIds.length,
+        succeeded: results.success.length,
+        failed: results.failed.length,
+        results: results,
+      },
+    });
+  } catch (error) {
+    console.error("❌ [ADMIN] Bulk resident action error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error performing bulk action",
+    });
+  }
+};
+
 module.exports = {
   getAdminDashboard,
   getAllBuildings,
@@ -1706,4 +2398,7 @@ module.exports = {
   getAllUsers,
   getBuildingDetails,
   getAvailableFlats,
+  getBuildingView,
+  getResidentsAdvanced,
+  bulkResidentAction,
 };
