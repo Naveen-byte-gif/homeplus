@@ -135,7 +135,24 @@ const validateUserRegistration = (req, res, next) => {
 // Complaint creation validation
 const validateComplaintCreation = (req, res, next) => {
   const schema = Joi.object({
-    title: Joi.string().max(100).required().trim(),
+    title: Joi.string()
+      .min(2)
+      .max(100)
+      .required()
+      .trim()
+      .custom((value, helpers) => {
+        // Count words (split by whitespace)
+        const words = value.trim().split(/\s+/).filter(word => word.length > 0);
+        if (words.length > 4) {
+          return helpers.message('Title must not exceed 4 words');
+        }
+        return value;
+      })
+      .messages({
+        'string.min': 'Title must be at least 2 characters',
+        'string.max': 'Title cannot exceed 100 characters',
+        'any.custom': 'Title must not exceed 4 words',
+      }),
     description: Joi.string().max(500).required().trim(),
     category: Joi.string().valid(
       'Electrical', 'Plumbing', 'Carpentry', 'Painting', 
@@ -146,7 +163,14 @@ const validateComplaintCreation = (req, res, next) => {
     location: Joi.object({
       specificLocation: Joi.string().required().trim(),
       accessInstructions: Joi.string().allow('').optional()
-    }).required()
+    }).required(),
+    media: Joi.array().items(
+      Joi.object({
+        url: Joi.string().required(),
+        publicId: Joi.string().optional(),
+        type: Joi.string().valid('image', 'video').default('image')
+      })
+    ).max(4).optional()
   });
 
   const { error } = schema.validate(req.body);
