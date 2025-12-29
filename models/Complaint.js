@@ -71,6 +71,18 @@ const complaintSchema = new mongoose.Schema(
         uploadedAt: { type: Date, default: Date.now },
       },
     ],
+    // Admin-uploaded evidence (inspection proof, resolution proof, etc.)
+    adminMedia: [
+      {
+        url: String,
+        publicId: String,
+        type: { type: String, enum: ["image", "video"] },
+        uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        uploadedAt: { type: Date, default: Date.now },
+        purpose: { type: String, enum: ["inspection", "resolution", "evidence", "other"] },
+        description: String,
+      },
+    ],
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

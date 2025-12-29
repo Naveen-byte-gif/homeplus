@@ -207,6 +207,8 @@ const getComplaint = async (req, res) => {
     await complaint.populate("comments.postedBy", "fullName role profilePicture");
     await complaint.populate("reopenedBy", "fullName role");
     await complaint.populate("cancelledBy", "fullName role");
+    await complaint.populate("internalNotes.addedBy", "fullName role");
+    await complaint.populate("adminMedia.uploadedBy", "fullName role");
 
     res.status(200).json({
       success: true,
@@ -1115,6 +1117,298 @@ const getAllTickets = async (req, res) => {
   }
 };
 
+// @desc    Upload admin media file and add to complaint
+// @route   POST /api/complaints/:id/upload-admin-media
+// @access  Private (Admin)
+const uploadAdminMedia = async (req, res) => {
+  try {
+    const complaintId = req.params.id;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    if (userRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can upload media",
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "No file uploaded",
+      });
+    }
+
+    const complaint = await Complaint.findById(complaintId);
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: "Complaint not found",
+      });
+    }
+
+    // Extract Cloudinary metadata from multer-storage-cloudinary
+    const file = req.file;
+    const { purpose, description } = req.body;
+
+    const mediaData = {
+      url: file.path, // secure_url from Cloudinary
+      publicId: file.filename || file.public_id, // public_id from Cloudinary
+      type: file.mimetype.startsWith("image/") ? "image" : "video",
+      uploadedBy: userId,
+      purpose: purpose || "evidence",
+      description: description || "",
+    };
+
+    // Add admin media
+    complaint.adminMedia.push(mediaData);
+    await complaint.save();
+
+    // Populate for response
+    await complaint.populate("adminMedia.uploadedBy", "fullName role");
+    await complaint.populate("createdBy", "fullName email notificationPreferences fcmToken");
+
+    // Send notification to resident
+    const pseudoComment = {
+      text: description || "Admin added evidence/inspection proof",
+      postedBy: userId,
+      postedAt: new Date(),
+    };
+    await notifyCommentAdded(complaint, pseudoComment, userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Admin media uploaded and added successfully",
+      data: {
+        media: mediaData,
+        complaint,
+      },
+    });
+  } catch (error) {
+    console.error("Upload admin media error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error uploading admin media",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// @desc    Add admin media/evidence to complaint (after upload - for manual URL entry)
+// @route   POST /api/complaints/:id/admin-media
+// @access  Private (Admin)
+const addAdminMedia = async (req, res) => {
+  try {
+    const complaintId = req.params.id;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    if (userRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can add media to complaints",
+      });
+    }
+
+    const complaint = await Complaint.findById(complaintId);
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: "Complaint not found",
+      });
+    }
+
+    const { url, publicId, type, purpose, description } = req.body;
+
+    if (!url || !publicId || !type) {
+      return res.status(400).json({
+        success: false,
+        message: "URL, publicId, and type are required",
+      });
+    }
+
+    // Add admin media
+    complaint.adminMedia.push({
+      url,
+      publicId,
+      type,
+      uploadedBy: userId,
+      purpose: purpose || "evidence",
+      description: description || "",
+    });
+
+    await complaint.save();
+
+    // Populate for response
+    await complaint.populate("adminMedia.uploadedBy", "fullName role");
+    await complaint.populate("createdBy", "fullName email notificationPreferences fcmToken");
+
+    // Send notification to resident
+    const pseudoComment = {
+      text: description || "Admin added evidence/inspection proof",
+      postedBy: userId,
+      postedAt: new Date(),
+    };
+    await notifyCommentAdded(complaint, pseudoComment, userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Admin media added successfully",
+      data: { complaint },
+    });
+  } catch (error) {
+    console.error("Add admin media error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error adding admin media",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// @desc    Add internal admin note (private, not visible to residents)
+// @route   POST /api/complaints/:id/internal-notes
+// @access  Private (Admin)
+const addInternalNote = async (req, res) => {
+  try {
+    const complaintId = req.params.id;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    if (userRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can add internal notes",
+      });
+    }
+
+    const complaint = await Complaint.findById(complaintId);
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: "Complaint not found",
+      });
+    }
+
+    const { note } = req.body;
+
+    if (!note || note.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Note text is required",
+      });
+    }
+
+    // Add internal note
+    complaint.internalNotes.push({
+      note: note.trim(),
+      addedBy: userId,
+      isInternal: true,
+    });
+
+    await complaint.save();
+
+    // Populate for response
+    await complaint.populate("internalNotes.addedBy", "fullName role");
+
+    res.status(200).json({
+      success: true,
+      message: "Internal note added successfully",
+      data: { complaint },
+    });
+  } catch (error) {
+    console.error("Add internal note error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error adding internal note",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// @desc    Update complaint priority
+// @route   PUT /api/complaints/:id/priority
+// @access  Private (Admin)
+const updatePriority = async (req, res) => {
+  try {
+    const complaintId = req.params.id;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+    const { priority, reason } = req.body;
+
+    if (userRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can update priority",
+      });
+    }
+
+    const complaint = await Complaint.findById(complaintId);
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: "Complaint not found",
+      });
+    }
+
+    const validPriorities = ["Low", "Medium", "High", "Emergency"];
+    if (!validPriorities.includes(priority)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid priority. Must be one of: Low, Medium, High, Emergency",
+      });
+    }
+
+    const oldPriority = complaint.priority;
+    complaint.priority = priority;
+
+    // Add timeline entry
+    complaint.timeline.push({
+      status: complaint.status,
+      description: reason || `Priority changed from ${oldPriority} to ${priority}`,
+      updatedBy: userId,
+    });
+
+    await complaint.save();
+
+    // Populate for response
+    await complaint.populate("createdBy", "fullName email notificationPreferences fcmToken");
+    await complaint.populate("assignedTo.staff", "user");
+    await complaint.populate({
+      path: "assignedTo.staff",
+      populate: { path: "user", select: "fullName email notificationPreferences fcmToken" },
+    });
+
+    // Send notification
+    const adminUser = await User.findById(userId).select("fullName role");
+    await notifyStatusUpdate(
+      complaint,
+      complaint.status,
+      complaint.status,
+      userId,
+      {
+        updatedByName: adminUser?.fullName || "Admin",
+        updatedAt: new Date().toISOString(),
+        priorityChange: { from: oldPriority, to: priority },
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Priority updated successfully",
+      data: { complaint },
+    });
+  } catch (error) {
+    console.error("Update priority error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating priority",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
 module.exports = {
   createComplaint,
   getMyComplaints,
@@ -1128,4 +1422,8 @@ module.exports = {
   reopenTicket,
   closeTicket,
   cancelTicket,
+  addAdminMedia,
+  uploadAdminMedia,
+  addInternalNote,
+  updatePriority,
 };

@@ -13,10 +13,15 @@ const {
   reopenTicket,
   closeTicket,
   cancelTicket,
+  addAdminMedia,
+  addInternalNote,
+  updatePriority,
+  uploadAdminMedia,
 } = require("../controllers/complaintController");
 const { protect } = require("../middleware/auth");
 const { authorize, requireStaffOrAdmin } = require("../middleware/roleCheck");
 const { validateComplaintCreation } = require("../middleware/validation");
+const { uploadConfigs } = require("../config/cloudinary");
 
 // All routes are protected
 router.use(protect);
@@ -51,6 +56,18 @@ router.post("/:id/close", authorize("resident"), closeTicket);
 
 // Assign ticket - ONLY admin
 router.post("/:id/assign", authorize("admin"), assignTicket);
+
+// Upload admin media file - ONLY admin
+router.post("/:id/upload-admin-media", authorize("admin"), uploadConfigs.complaintImages.single("media"), uploadAdminMedia);
+
+// Add admin media/evidence - ONLY admin (after upload)
+router.post("/:id/admin-media", authorize("admin"), addAdminMedia);
+
+// Add internal note - ONLY admin
+router.post("/:id/internal-notes", authorize("admin"), addInternalNote);
+
+// Update priority - ONLY admin
+router.put("/:id/priority", authorize("admin"), updatePriority);
 
 // ==========================================
 // STAFF ROUTES

@@ -13,7 +13,10 @@ const {
   createUser,
   getAllUsers,
   getBuildingDetails,
-  getAvailableFlats
+  getAvailableFlats,
+  getBuildingView,
+  getResidentsAdvanced,
+  bulkResidentAction
 } = require('../controllers/adminController');
 
 // Import complaint controller for status updates
@@ -24,11 +27,19 @@ const {
   reopenTicket
 } = require('../controllers/complaintController');
 const { protect } = require('../middleware/auth');
-const { requireAdmin } = require('../middleware/roleCheck');
+const { requireAdmin, authorize } = require('../middleware/roleCheck');
 
-// All routes are protected and require admin access
+// All routes are protected
 router.use(protect);
-router.use(requireAdmin);
+
+// Most routes require admin, but building-view allows all roles
+// Apply admin check to all routes except building-view
+router.use((req, res, next) => {
+  if (req.path === '/building-view' || req.originalUrl.includes('/building-view')) {
+    return next(); // Skip admin check for building-view
+  }
+  requireAdmin(req, res, next);
+});
 // router.use('/some-route', adminController.someMiddlewareFunction); // ← REMOVE OR COMMENT THIS LINE
 
 // Dashboard
@@ -55,10 +66,15 @@ router.get('/buildings', getAllBuildings);
 router.post('/buildings', createBuilding);
 router.post('/apartments', createApartment); // Keep for backward compatibility
 router.get('/building-details', getBuildingDetails);
+router.get('/building-view', getBuildingView); // Role-based building view
 router.get('/available-flats', getAvailableFlats);
 
 // User management
 router.post('/users', createUser);
 router.get('/users', getAllUsers);
+
+// Resident management (advanced)
+router.get('/residents', getResidentsAdvanced);
+router.post('/residents/bulk-action', bulkResidentAction);
 
 module.exports = router;
