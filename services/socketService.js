@@ -1,9 +1,5 @@
 let io;
 const User = require('../models/User');
-const ChatRoom = require('../models/ChatRoom');
-
-// Track typing users per chat
-const typingUsers = new Map(); // chatId -> Set of userIds
 
 const initializeSocket = (socketIO) => {
   io = socketIO;
@@ -66,75 +62,6 @@ const initializeSocket = (socketIO) => {
       }
     });
 
-    // Chat-specific events
-    socket.on('typing_start', async (data) => {
-      const { chatId } = data;
-      if (!chatId) return;
-
-      // Add user to typing set
-      if (!typingUsers.has(chatId)) {
-        typingUsers.set(chatId, new Set());
-      }
-      typingUsers.get(chatId).add(userId);
-
-      // Get chat to determine recipients
-      const chat = await ChatRoom.findById(chatId);
-      if (!chat) return;
-
-      if (chat.type === 'personal') {
-        // Emit to other participant
-        chat.participants.forEach((p) => {
-          if (p.user.toString() !== userId) {
-            emitToUser(p.user.toString(), 'typing_start', {
-              chatId,
-              userId,
-              userName: socket.user.fullName
-            });
-          }
-        });
-      } else if (chat.apartmentCode) {
-        // Emit to apartment room
-        emitToRoom(`apartment_${chat.apartmentCode}`, 'typing_start', {
-          chatId,
-          userId,
-          userName: socket.user.fullName
-        });
-      }
-    });
-
-    socket.on('typing_stop', async (data) => {
-      const { chatId } = data;
-      if (!chatId) return;
-
-      // Remove user from typing set
-      if (typingUsers.has(chatId)) {
-        typingUsers.get(chatId).delete(userId);
-        if (typingUsers.get(chatId).size === 0) {
-          typingUsers.delete(chatId);
-        }
-      }
-
-      // Get chat to determine recipients
-      const chat = await ChatRoom.findById(chatId);
-      if (!chat) return;
-
-      if (chat.type === 'personal') {
-        chat.participants.forEach((p) => {
-          if (p.user.toString() !== userId) {
-            emitToUser(p.user.toString(), 'typing_stop', {
-              chatId,
-              userId
-            });
-          }
-        });
-      } else if (chat.apartmentCode) {
-        emitToRoom(`apartment_${chat.apartmentCode}`, 'typing_stop', {
-          chatId,
-          userId
-        });
-      }
-    });
-
     // Handle disconnection
     socket.on('disconnect', async () => {
       console.log(`❌ [SOCKET] User ${userId} disconnected`);
@@ -153,16 +80,6 @@ const initializeSocket = (socketIO) => {
           lastSeen: new Date()
         });
       }
-
-      // Clean up typing indicators
-      typingUsers.forEach((userSet, chatId) => {
-        if (userSet.has(userId)) {
-          userSet.delete(userId);
-          if (userSet.size === 0) {
-            typingUsers.delete(chatId);
-          }
-        }
-      });
     });
 
     // Handle custom events
@@ -236,38 +153,11 @@ const getOnlineUsersCount = () => {
   return 0;
 };
 
-// Get online users for a chat
-const getOnlineUsersForChat = async (chatId) => {
-  if (!io) return [];
-  
-  const chat = await ChatRoom.findById(chatId);
-  if (!chat) return [];
-
-  if (chat.type === 'personal') {
-    const userIds = chat.participants.map(p => p.user.toString());
-    const users = await User.find({ _id: { $in: userIds }, isOnline: true })
-      .select('_id fullName isOnline lastSeen')
-      .lean();
-    return users;
-  } else if (chat.apartmentCode) {
-    const users = await User.find({ 
-      apartmentCode: chat.apartmentCode, 
-      isOnline: true 
-    })
-      .select('_id fullName isOnline lastSeen')
-      .lean();
-    return users;
-  }
-  
-  return [];
-};
-
 module.exports = {
   initializeSocket,
   emitToUser,
   emitToRoom,
   broadcastToApartment,
   broadcastToAll,
-  getOnlineUsersCount,
-  getOnlineUsersForChat
+  getOnlineUsersCount
 };
