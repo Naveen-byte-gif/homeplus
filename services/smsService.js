@@ -1,243 +1,280 @@
-const twilio = require('twilio');
+const https = require('https');
 
-// Initialize Twilio client with proper validation
-let twilioClient = null;
+/**
+ * Brevo SMS Service - Production-Ready Implementation
+ * Uses Brevo Transactional SMS API (not SMTP)
+ */
 
-try {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
-  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
-  
-  // Validate that credentials exist and accountSid starts with "AC" (required by Twilio)
-  if (accountSid && authToken && accountSid.startsWith('AC')) {
-    twilioClient = twilio(accountSid, authToken);
-  } else if (accountSid || authToken) {
-    // Credentials exist but are invalid
-    console.warn('⚠️ [SMS] Invalid Twilio credentials detected');
-    if (accountSid && !accountSid.startsWith('AC')) {
-      console.warn(`   - TWILIO_ACCOUNT_SID must start with "AC", got: ${accountSid.substring(0, 3)}...`);
-    }
-    if (!accountSid) {
-      console.warn('   - TWILIO_ACCOUNT_SID is empty or missing');
-    }
-    if (!authToken) {
-      console.warn('   - TWILIO_AUTH_TOKEN is empty or missing');
-    }
-  }
-} catch (error) {
-  console.error('❌ [SMS] Error initializing Twilio client:', error.message);
-  console.warn('⚠️ [SMS] Twilio SMS service will be disabled');
-  twilioClient = null;
-}
+// Brevo SMS API Configuration
+const BREVO_SMS_API_URL = 'https://api.brevo.com/v3/transactionalSMS';
+const BREVO_SMS_API_KEY = process.env.BREVO_API_KEY || process.env.BREVO_SMS_API_KEY;
+const BREVO_SENDER_NAME = process.env.BREVO_SMS_SENDER || 'ApartmentSync';
 
-// Log Twilio configuration status on startup
-if (twilioClient && process.env.TWILIO_PHONE_NUMBER) {
-  console.log('✅ [SMS] Twilio SMS service configured and ready');
-  console.log(`📱 [SMS] Twilio Phone Number: ${process.env.TWILIO_PHONE_NUMBER}`);
+// Validate Brevo SMS configuration on startup
+if (BREVO_SMS_API_KEY) {
+  console.log('✅ [SMS] Brevo SMS service configured');
+  console.log(`📱 [SMS] Brevo API URL: ${BREVO_SMS_API_URL}`);
+  console.log(`📱 [SMS] Sender Name: ${BREVO_SENDER_NAME}`);
 } else {
-  console.warn('⚠️ [SMS] Twilio SMS service NOT configured');
-  if (!process.env.TWILIO_ACCOUNT_SID) {
-    console.warn('   - Missing: TWILIO_ACCOUNT_SID');
-  }
-  if (!process.env.TWILIO_AUTH_TOKEN) {
-    console.warn('   - Missing: TWILIO_AUTH_TOKEN');
-  }
-  if (!process.env.TWILIO_PHONE_NUMBER) {
-    console.warn('   - Missing: TWILIO_PHONE_NUMBER');
-  }
-  console.warn('   - OTPs will be logged to console instead of sent via SMS');
-  console.warn('   - Add credentials to .env file to enable SMS sending');
+  console.warn('⚠️ [SMS] Brevo SMS service NOT configured');
+  console.warn('   - Missing: BREVO_API_KEY or BREVO_SMS_API_KEY');
+  console.warn('   - SMS will be logged to console instead of sent');
 }
 
 /**
- * Format phone number to E.164 format
+ * Format phone number to international format
  * @param {string} phoneNumber - Phone number (can be 10 digits or with country code)
- * @returns {string} - Formatted phone number in E.164 format
+ * @returns {string} - Formatted phone number with country code
  */
 const formatPhoneNumber = (phoneNumber) => {
+  if (!phoneNumber) return null;
+  
   // Remove all non-digit characters
-  const cleaned = phoneNumber.replace(/\D/g, '');
+  const cleaned = phoneNumber.toString().replace(/\D/g, '');
   
   // If already has country code (starts with + or has 11+ digits), return as is
   if (phoneNumber.startsWith('+')) {
-    return phoneNumber;
+    return phoneNumber.replace(/\D/g, '');
   }
   
-  // If 10 digits, assume Indian number and add +91
+  // If 10 digits, assume Indian number and add 91
   if (cleaned.length === 10) {
-    return `+91${cleaned}`;
+    return `91${cleaned}`;
   }
   
-  // If 11 digits and starts with 0, remove leading 0 and add +91
+  // If 11 digits and starts with 0, remove leading 0 and add 91
   if (cleaned.length === 11 && cleaned.startsWith('0')) {
-    return `+91${cleaned.substring(1)}`;
+    return `91${cleaned.substring(1)}`;
   }
   
-  // If 12 digits and starts with 91, add +
+  // If 12 digits and starts with 91, return as is
   if (cleaned.length === 12 && cleaned.startsWith('91')) {
-    return `+${cleaned}`;
+    return cleaned;
   }
   
-  // Default: assume it's already in correct format or return with +91
-  return cleaned.length === 10 ? `+91${cleaned}` : `+${cleaned}`;
+  // Default: assume it's already in correct format or return with 91
+  return cleaned.length === 10 ? `91${cleaned}` : cleaned;
 };
 
 /**
- * Send OTP via SMS using Twilio
- * @param {string} phoneNumber - Phone number to send OTP to
- * @param {string} otp - 6-digit OTP code
- * @returns {Promise<{success: boolean, message: string, sid?: string}>}
+ * Make HTTP request to Brevo SMS API
+ * @param {string} endpoint - API endpoint
+ * @param {string} method - HTTP method
+ * @param {object} data - Request body data
+ * @returns {Promise<object>} - API response
  */
-const sendOTP = async (phoneNumber, otp) => {
-  // Format phone number outside try block so it's available in catch
-  let formattedPhone = phoneNumber;
-  
+const makeBrevoRequest = (endpoint, method = 'POST', data = {}) => {
+  return new Promise((resolve, reject) => {
+    const url = new URL(endpoint);
+    
+    const options = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname,
+      method: method,
+      headers: {
+        'accept': 'application/json',
+        'api-key': BREVO_SMS_API_KEY,
+        'content-type': 'application/json'
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let responseData = '';
+
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(responseData);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(parsed);
+          } else {
+            reject({
+              statusCode: res.statusCode,
+              message: parsed.message || 'SMS API error',
+              response: parsed
+            });
+          }
+        } catch (error) {
+          reject({
+            statusCode: res.statusCode,
+            message: 'Failed to parse response',
+            error: error.message
+          });
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      reject({
+        statusCode: 0,
+        message: 'Network error',
+        error: error.message
+      });
+    });
+
+    if (method === 'POST' && Object.keys(data).length > 0) {
+      req.write(JSON.stringify(data));
+    }
+
+    req.end();
+  });
+};
+
+/**
+ * Send SMS using Brevo Transactional SMS API
+ * @param {string} phoneNumber - Phone number to send SMS to
+ * @param {string} message - SMS message content
+ * @param {string} sender - Sender name (optional, defaults to BREVO_SMS_SENDER)
+ * @returns {Promise<{success: boolean, message: string, messageId?: string}>}
+ */
+const sendSMS = async (phoneNumber, message, sender = null) => {
   try {
     // Validate inputs
-    if (!phoneNumber || !otp) {
-      console.error('❌ [SMS] Missing phone number or OTP');
-      return { 
-        success: false, 
-        message: 'Phone number and OTP are required' 
+    if (!phoneNumber || !message) {
+      console.error('❌ [SMS] Missing phone number or message');
+      return {
+        success: false,
+        message: 'Phone number and message are required'
       };
     }
 
     // Format phone number
-    formattedPhone = formatPhoneNumber(phoneNumber);
-    console.log(`📱 [SMS] Sending OTP to ${formattedPhone} (original: ${phoneNumber})`);
-
-    // Check if Twilio is configured
-    if (!twilioClient) {
-      console.warn('⚠️ [SMS] Twilio client not initialized - logging OTP for development');
-      console.warn('⚠️ [SMS] To enable SMS sending, add TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN to .env file');
-      console.log(`📱 [SMS] OTP for ${formattedPhone}: ${otp}`);
-      console.log(`📱 [SMS] ⚠️ SMS NOT SENT - Twilio credentials missing. Check server logs for OTP.`);
-      return { 
-        success: true, 
-        message: 'OTP logged (Twilio not configured - check server logs for OTP code)' 
+    const formattedPhone = formatPhoneNumber(phoneNumber);
+    if (!formattedPhone) {
+      return {
+        success: false,
+        message: 'Invalid phone number format'
       };
     }
 
-    // Check if Twilio phone number is configured
-    if (!process.env.TWILIO_PHONE_NUMBER) {
-      console.warn('⚠️ [SMS] TWILIO_PHONE_NUMBER not configured - logging OTP');
-      console.warn('⚠️ [SMS] To enable SMS sending, add TWILIO_PHONE_NUMBER to .env file');
-      console.log(`📱 [SMS] OTP for ${formattedPhone}: ${otp}`);
-      console.log(`📱 [SMS] ⚠️ SMS NOT SENT - Twilio phone number missing. Check server logs for OTP.`);
-      return { 
-        success: true, 
-        message: 'OTP logged (Twilio phone number not configured - check server logs for OTP code)' 
+    console.log(`📱 [SMS] Sending SMS to ${formattedPhone} (original: ${phoneNumber})`);
+
+    // Check if Brevo is configured
+    if (!BREVO_SMS_API_KEY) {
+      console.warn('⚠️ [SMS] Brevo API key not configured - logging SMS for development');
+      console.log(`📱 [SMS] SMS for ${formattedPhone}: ${message}`);
+      console.log(`📱 [SMS] ⚠️ SMS NOT SENT - Brevo credentials missing. Check server logs.`);
+      return {
+        success: true,
+        message: 'SMS logged (Brevo not configured - check server logs)'
       };
     }
 
-    // Send SMS via Twilio
-    const message = await twilioClient.messages.create({
-      body: `Your ApartmentSync verification code is: ${otp}. This code will expire in 5 minutes.`,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: formattedPhone
-    });
-
-    console.log(`✅ [SMS] OTP sent successfully to ${formattedPhone}`);
-    console.log(`📋 [SMS] Message SID: ${message.sid}`);
-    console.log(`📋 [SMS] Message Status: ${message.status}`);
-    
-    return { 
-      success: true, 
-      message: 'OTP sent successfully',
-      sid: message.sid,
-      status: message.status
+    // Prepare SMS data for Brevo API
+    const smsData = {
+      sender: sender || BREVO_SENDER_NAME,
+      recipient: formattedPhone,
+      content: message,
+      type: 'transactional' // or 'marketing'
     };
+
+    // Send SMS via Brevo API
+    const response = await makeBrevoRequest(
+      `${BREVO_SMS_API_URL}/sms`,
+      'POST',
+      smsData
+    );
+
+    console.log(`✅ [SMS] SMS sent successfully to ${formattedPhone}`);
+    console.log(`📋 [SMS] Message ID: ${response.messageId || 'N/A'}`);
+    console.log(`📋 [SMS] Status: ${response.status || 'sent'}`);
+
+    return {
+      success: true,
+      message: 'SMS sent successfully',
+      messageId: response.messageId,
+      status: response.status
+    };
+
   } catch (error) {
-    console.error('❌ [SMS] Error sending OTP:', error);
+    console.error('❌ [SMS] Error sending SMS:', error);
     console.error('❌ [SMS] Error details:', {
-      code: error.code,
+      statusCode: error.statusCode,
       message: error.message,
-      status: error.status,
-      moreInfo: error.moreInfo
+      response: error.response
     });
-    
+
     // Provide user-friendly error messages
-    let errorMessage = 'Failed to send OTP. Please try again.';
-    
-    if (error.code === 21211) {
-      errorMessage = 'Invalid phone number format. Please check and try again.';
-    } else if (error.code === 21608) {
-      // Trial account limitation - phone number needs to be verified
-      console.error('❌ [SMS] Trial account limitation: Phone number must be verified');
-      console.error('❌ [SMS] Verify at: https://console.twilio.com/us1/develop/phone-numbers/manage/verified');
-      errorMessage = `Phone number ${formattedPhone} is not verified. For trial accounts, you must verify the number first at https://console.twilio.com/us1/develop/phone-numbers/manage/verified. The OTP code is: ${otp}`;
-    } else if (error.code === 21614) {
-      errorMessage = 'Invalid phone number. Please check and try again.';
+    let errorMessage = 'Failed to send SMS. Please try again.';
+
+    if (error.statusCode === 400) {
+      errorMessage = 'Invalid request. Please check phone number format.';
+    } else if (error.statusCode === 401) {
+      errorMessage = 'Authentication failed. Please check Brevo API key.';
+    } else if (error.statusCode === 402) {
+      errorMessage = 'Insufficient credits. Please top up your Brevo account.';
+    } else if (error.statusCode === 403) {
+      errorMessage = 'Access forbidden. Please check API permissions.';
     } else if (error.message) {
       errorMessage = `SMS service error: ${error.message}`;
     }
-    
-    return { 
-      success: false, 
+
+    return {
+      success: false,
       message: errorMessage,
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     };
   }
 };
 
-// Send urgent notice via SMS
-const sendUrgentNotice = async (phoneNumber, noticeTitle) => {
-  try {
-    const formattedPhone = formatPhoneNumber(phoneNumber);
-    
-    if (!twilioClient || !process.env.TWILIO_PHONE_NUMBER) {
-      console.log(`📱 [SMS] Urgent notice for ${formattedPhone}: ${noticeTitle}`);
-      return { success: true, message: 'Urgent notice logged (Twilio not configured)' };
-    }
-
-    const message = await twilioClient.messages.create({
-      body: `URGENT: ${noticeTitle}. Please check ApartmentSync app for details.`,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: formattedPhone
-    });
-
-    console.log(`✅ [SMS] Urgent notice sent to ${formattedPhone}`);
-    return { success: true, message: 'Urgent notice sent', sid: message.sid };
-  } catch (error) {
-    console.error('❌ [SMS] Urgent notice error:', error);
-    return { 
-      success: false, 
-      message: 'Failed to send urgent notice',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    };
-  }
+/**
+ * Send OTP via SMS using Brevo
+ * @param {string} phoneNumber - Phone number to send OTP to
+ * @param {string} otp - 6-digit OTP code
+ * @returns {Promise<{success: boolean, message: string, messageId?: string}>}
+ */
+const sendOTP = async (phoneNumber, otp) => {
+  const message = `Your ApartmentSync verification code is: ${otp}. This code will expire in 5 minutes. Do not share this code with anyone.`;
+  
+  return await sendSMS(phoneNumber, message);
 };
 
-// Send payment reminder via SMS
-const sendPaymentReminder = async (phoneNumber, amount, dueDate) => {
-  try {
-    const formattedPhone = formatPhoneNumber(phoneNumber);
-    
-    if (!twilioClient || !process.env.TWILIO_PHONE_NUMBER) {
-      console.log(`📱 [SMS] Payment reminder for ${formattedPhone}: ₹${amount} due ${dueDate}`);
-      return { success: true, message: 'Payment reminder logged (Twilio not configured)' };
-    }
+/**
+ * Send welcome SMS
+ * @param {string} phoneNumber - Phone number to send welcome SMS to
+ * @param {string} userName - User's name
+ * @returns {Promise<{success: boolean, message: string, messageId?: string}>}
+ */
+const sendWelcomeSMS = async (phoneNumber, userName) => {
+  const message = `Welcome to ApartmentSync, ${userName}! Your account has been created successfully. Download our app to get started.`;
+  
+  return await sendSMS(phoneNumber, message);
+};
 
-    const message = await twilioClient.messages.create({
-      body: `Reminder: Maintenance payment of ₹${amount} is due on ${dueDate}. Please pay via ApartmentSync app.`,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: formattedPhone
-    });
+/**
+ * Send notification SMS
+ * @param {string} phoneNumber - Phone number to send notification to
+ * @param {string} title - Notification title
+ * @param {string} body - Notification body
+ * @returns {Promise<{success: boolean, message: string, messageId?: string}>}
+ */
+const sendNotificationSMS = async (phoneNumber, title, body) => {
+  const message = `${title}\n\n${body}\n\n- ApartmentSync`;
+  
+  return await sendSMS(phoneNumber, message);
+};
 
-    console.log(`✅ [SMS] Payment reminder sent to ${formattedPhone}`);
-    return { success: true, message: 'Payment reminder sent', sid: message.sid };
-  } catch (error) {
-    console.error('❌ [SMS] Payment reminder error:', error);
-    return { 
-      success: false, 
-      message: 'Failed to send payment reminder',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    };
-  }
+/**
+ * Send urgent alert SMS
+ * @param {string} phoneNumber - Phone number to send alert to
+ * @param {string} alertMessage - Alert message
+ * @returns {Promise<{success: boolean, message: string, messageId?: string}>}
+ */
+const sendUrgentAlertSMS = async (phoneNumber, alertMessage) => {
+  const message = `🚨 URGENT ALERT 🚨\n\n${alertMessage}\n\nPlease check ApartmentSync app immediately.`;
+  
+  return await sendSMS(phoneNumber, message);
 };
 
 module.exports = {
+  sendSMS,
   sendOTP,
-  sendUrgentNotice,
-  sendPaymentReminder,
+  sendWelcomeSMS,
+  sendNotificationSMS,
+  sendUrgentAlertSMS,
   formatPhoneNumber // Export for testing/utility purposes
 };

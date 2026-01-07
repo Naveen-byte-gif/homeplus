@@ -141,6 +141,23 @@ const uploadConfigs = {
         cb(new Error('Only PDF, JPEG, and PNG files are allowed'), false);
       }
     }
+  }),
+
+  // Chat images
+  chatImages: multer({
+    storage: createCloudinaryStorage('chat/images'),
+    limits: {
+      fileSize: 5 * 1024 * 1024, // 5MB
+      files: 1
+    },
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      if (allowedTypes.includes(file.mimetype)) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only JPEG, PNG, and WebP images are allowed'), false);
+      }
+    }
   })
 };
 

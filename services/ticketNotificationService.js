@@ -5,6 +5,8 @@ const {
   sendComplaintRegisteredEmail,
   sendComplaintStatusUpdateEmail,
   sendComplaintResolvedEmail,
+  sendAdminNewComplaintEmail,
+  sendAdminComplaintStatusChangeEmail,
 } = require('./emailService');
 const { emitToUser, emitToRoom } = require('./socketService');
 
@@ -53,14 +55,27 @@ const notifyTicketCreated = async (complaint) => {
     if (!creator) return;
 
     // Prepare notification data
+    // Format timestamp
+    const createdAt = new Date(complaint.createdAt).toLocaleString('en-IN', { 
+      timeZone: 'Asia/Kolkata',
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    });
+
     const notificationData = {
       type: 'ticket_created',
       ticketId: complaint._id.toString(),
+      complaintId: complaint._id.toString(),
       ticketNumber: complaint.ticketNumber,
+      referenceId: complaint.ticketNumber, // For Flutter display
       title: complaint.title,
       category: complaint.category,
       priority: complaint.priority,
       status: complaint.status,
+      dateTime: createdAt, // Formatted date/time for display
+      formattedDate: new Date(complaint.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }),
+      formattedTime: new Date(complaint.createdAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }),
+      timestamp: complaint.createdAt ? new Date(complaint.createdAt).toISOString() : new Date().toISOString(),
     };
 
     // 1. Socket.IO real-time notification
@@ -69,46 +84,131 @@ const notifyTicketCreated = async (complaint) => {
       ...notificationData,
     });
 
-    // 2. Push notification (if FCM token exists and user enabled push)
-    if (creator.fcmToken && creator.notificationPreferences?.push) {
-      await sendPushNotification(
-        creator.fcmToken,
-        {
-          title: 'Ticket Created',
-          body: `Your ticket ${complaint.ticketNumber} has been created successfully`,
-        },
-        notificationData
-      );
+    // 2. Always send FCM push notification to resident (important confirmation)
+    console.log(`\n🔔 [NOTIFICATION] Checking FCM token for resident ${creator._id.toString()}`);
+    console.log(`🔔 [NOTIFICATION] Resident name: ${creator.fullName}`);
+    console.log(`🔔 [NOTIFICATION] Resident email: ${creator.email}`);
+    console.log(`🔔 [NOTIFICATION] FCM token exists: ${creator.fcmToken ? 'YES' : 'NO'}`);
+    if (creator.fcmToken) {
+      console.log(`🔔 [NOTIFICATION] FCM token preview: ${creator.fcmToken.substring(0, 50)}...`);
+      try {
+        console.log(`🔔 [NOTIFICATION] Attempting to send FCM notification...`);
+        const fcmResult = await sendPushNotification(
+          creator.fcmToken,
+          {
+            title: '✅ Ticket Created Successfully',
+            body: `Your ticket ${complaint.ticketNumber} has been created successfully. We'll notify you about updates.`,
+          },
+          notificationData
+        );
+        if (fcmResult.success) {
+          console.log(`✅ [NOTIFICATION] FCM push SUCCESS to resident ${creator._id.toString()}`);
+          console.log(`✅ [NOTIFICATION] FCM Message ID: ${fcmResult.messageId}`);
+        } else {
+          console.error(`❌ [NOTIFICATION] FCM push FAILED to resident ${creator._id.toString()}`);
+          console.error(`❌ [NOTIFICATION] FCM Error: ${fcmResult.message}`);
+          if (fcmResult.shouldRemove) {
+            console.error(`⚠️ [NOTIFICATION] ACTION REQUIRED: Remove invalid FCM token from user ${creator._id.toString()}`);
+          }
+        }
+      } catch (fcmError) {
+        console.error(`❌ [NOTIFICATION] FCM push EXCEPTION for resident ${creator._id.toString()}:`, fcmError);
+        console.error(`❌ [NOTIFICATION] Exception message: ${fcmError.message}`);
+        console.error(`❌ [NOTIFICATION] Exception stack:`, fcmError.stack);
+      }
+    } else {
+      console.warn(`⚠️ [NOTIFICATION] WARNING: No FCM token for resident ${creator._id.toString()}`);
+      console.warn(`⚠️ [NOTIFICATION] Resident must update FCM token in app settings`);
     }
 
-    // 3. Email notification (if user enabled email)
-    if (creator.email && creator.notificationPreferences?.email) {
-      await sendComplaintRegisteredEmail(creator, complaint);
+    // 3. Always send email notification to resident (important confirmation)
+    if (creator.email) {
+      try {
+        await sendComplaintRegisteredEmail(creator, complaint);
+        console.log(`✅ [NOTIFICATION] Email sent to resident ${creator.email}`);
+      } catch (emailError) {
+        console.error(`❌ [NOTIFICATION] Email failed:`, emailError.message);
+      }
     }
 
-    // 4. Notify all admins with complete location information
-    const admins = await User.find({ role: 'admin', status: 'active' });
+    // Format residence location
+    const residenceLocation = formatResidenceLocation(complaint, creator);
+
+    // 4. Notify all admins from the same apartment with complete location information
+    const admins = await User.find({ 
+      role: 'admin', 
+      status: 'active',
+      apartmentCode: creator.apartmentCode // Only notify admins from same apartment
+    });
+    
     for (const admin of admins) {
       // Socket notification with location
       emitToUser(admin._id.toString(), 'new_ticket', {
         message: `New ticket ${complaint.ticketNumber} created by ${creator.fullName} at ${residenceLocation}`,
         ...notificationData,
         createdBy: creator.fullName,
+        location: residenceLocation,
       });
 
-      // Push notification with location
-      if (admin.fcmToken && admin.notificationPreferences?.push) {
-        await sendPushNotification(
-          admin.fcmToken,
-          {
-            title: 'New Ticket Created',
-            body: `${creator.fullName} created ticket ${complaint.ticketNumber} - ${residenceLocation}`,
-          },
-          {
-            ...notificationData,
-            type: 'new_ticket',
+      // Always send FCM push notification to admin (important updates)
+      console.log(`\n🔔 [NOTIFICATION] Checking FCM token for admin ${admin._id.toString()}`);
+      console.log(`🔔 [NOTIFICATION] Admin name: ${admin.fullName}`);
+      console.log(`🔔 [NOTIFICATION] Admin email: ${admin.email}`);
+      console.log(`🔔 [NOTIFICATION] FCM token exists: ${admin.fcmToken ? 'YES' : 'NO'}`);
+      if (admin.fcmToken) {
+        console.log(`🔔 [NOTIFICATION] FCM token preview: ${admin.fcmToken.substring(0, 50)}...`);
+        try {
+          console.log(`🔔 [NOTIFICATION] Attempting to send FCM notification to admin...`);
+          const fcmResult = await sendPushNotification(
+            admin.fcmToken,
+            {
+              title: '🚨 New Complaint Received',
+              body: `${creator.fullName} created ticket ${complaint.ticketNumber}\n${residenceLocation}\nPriority: ${complaint.priority}`,
+            },
+            {
+              ...notificationData,
+              type: 'new_ticket',
+              referenceId: complaint.ticketNumber,
+              status: complaint.status,
+              dateTime: new Date(complaint.createdAt).toLocaleString('en-IN', { 
+                timeZone: 'Asia/Kolkata',
+                dateStyle: 'medium',
+                timeStyle: 'short'
+              }),
+              formattedDate: new Date(complaint.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }),
+              formattedTime: new Date(complaint.createdAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }),
+              locationText: residenceLocation,
+              createdBy: creator.fullName,
+            }
+          );
+          if (fcmResult.success) {
+            console.log(`✅ [NOTIFICATION] FCM push SUCCESS to admin ${admin._id.toString()}`);
+            console.log(`✅ [NOTIFICATION] FCM Message ID: ${fcmResult.messageId}`);
+          } else {
+            console.error(`❌ [NOTIFICATION] FCM push FAILED to admin ${admin._id.toString()}`);
+            console.error(`❌ [NOTIFICATION] FCM Error: ${fcmResult.message}`);
+            if (fcmResult.shouldRemove) {
+              console.error(`⚠️ [NOTIFICATION] ACTION REQUIRED: Remove invalid FCM token from admin ${admin._id.toString()}`);
+            }
           }
-        );
+        } catch (fcmError) {
+          console.error(`❌ [NOTIFICATION] FCM push EXCEPTION for admin ${admin._id.toString()}:`, fcmError);
+          console.error(`❌ [NOTIFICATION] Exception message: ${fcmError.message}`);
+          console.error(`❌ [NOTIFICATION] Exception stack:`, fcmError.stack);
+        }
+      } else {
+        console.warn(`⚠️ [NOTIFICATION] WARNING: No FCM token for admin ${admin._id.toString()}`);
+        console.warn(`⚠️ [NOTIFICATION] Admin must update FCM token in app settings`);
+      }
+
+      // Always send email notification to admin (important updates)
+      if (admin.email) {
+        try {
+          await sendAdminNewComplaintEmail(admin.email, complaint, creator, residenceLocation);
+          console.log(`✅ [NOTIFICATION] Email sent to admin ${admin.email}`);
+        } catch (emailError) {
+          console.error(`❌ [NOTIFICATION] Email failed for admin ${admin.email}:`, emailError.message);
+        }
       }
     }
 
@@ -204,29 +304,41 @@ const notifyStatusUpdate = async (complaint, oldStatus, newStatus, updatedBy, op
     const updatedAt = options.updatedAt || new Date().toISOString();
     const updatedByName = options.updatedByName || updater?.fullName || 'Admin';
 
+    // Format timestamp for display
+    const formattedDateTime = new Date(updatedAt).toLocaleString('en-IN', { 
+      timeZone: 'Asia/Kolkata',
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    });
+
     const notificationData = {
       type: 'ticket_status_updated',
       ticketId: complaint._id.toString(),
       complaintId: complaint._id.toString(),
       ticketNumber: complaint.ticketNumber,
+      referenceId: complaint.ticketNumber, // For Flutter display
       title: complaint.title,
       oldStatus,
       newStatus,
+      status: newStatus, // Current status for Flutter
       updatedBy: updatedByName,
       updatedByRole: updater?.role || 'admin',
       updatedAt: updatedAt,
+      dateTime: formattedDateTime, // Formatted date/time for display
+      formattedDate: new Date(updatedAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }),
+      formattedTime: new Date(updatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }),
       timestamp: updatedAt,
-      // Include complete residence location
+      // Include complete residence location (as string for FCM)
       residenceLocation: residenceLocation,
-      location: {
-        apartmentCode: creator.apartmentCode,
-        wing: creator.wing || complaint.location?.wing,
-        floorNumber: creator.floorNumber || complaint.location?.floorNumber,
-        flatNumber: creator.flatNumber || complaint.location?.flatNumber,
-        specificLocation: complaint.location?.specificLocation,
-      },
+      locationText: residenceLocation, // For easy access
       category: complaint.category,
       priority: complaint.priority,
+      // Location details (will be stringified by FCM service)
+      apartmentCode: creator.apartmentCode || '',
+      wing: (creator.wing || complaint.location?.wing || '').toString(),
+      floorNumber: (creator.floorNumber || complaint.location?.floorNumber || '').toString(),
+      flatNumber: (creator.flatNumber || complaint.location?.flatNumber || '').toString(),
+      specificLocation: (complaint.location?.specificLocation || '').toString(),
     };
 
     // 1. Notify ticket creator (Resident)
@@ -241,27 +353,62 @@ const notifyStatusUpdate = async (complaint, oldStatus, newStatus, updatedBy, op
     
     console.log(`✅ [NOTIFICATION] Status update notification sent to resident ${creator._id.toString()}`);
 
-    if (creator.fcmToken && creator.notificationPreferences?.push) {
+    // Always send FCM push notification for status changes (important updates)
+    console.log(`\n🔔 [NOTIFICATION] Status Update - Checking FCM token for resident ${creator._id.toString()}`);
+    console.log(`🔔 [NOTIFICATION] Resident name: ${creator.fullName}`);
+    console.log(`🔔 [NOTIFICATION] Resident email: ${creator.email}`);
+    console.log(`🔔 [NOTIFICATION] Old Status: ${oldStatus}`);
+    console.log(`🔔 [NOTIFICATION] New Status: ${newStatus}`);
+    console.log(`🔔 [NOTIFICATION] FCM token exists: ${creator.fcmToken ? 'YES' : 'NO'}`);
+    
+    if (creator.fcmToken) {
+      console.log(`🔔 [NOTIFICATION] FCM token preview: ${creator.fcmToken.substring(0, 50)}...`);
       // Enhanced notification body with friendly tone as requested
       const notificationBody = `Your complaint has been updated 👍\nWe're actively working on it.\n\nStatus: ${newStatus}`;
 
-      await sendPushNotification(
-        creator.fcmToken,
-        {
-          title: 'Ticket Status Updated',
-          body: notificationBody,
-          // Include location in notification data
-          data: {
+      try {
+        console.log(`🔔 [NOTIFICATION] Attempting to send status update FCM notification...`);
+        const fcmResult = await sendPushNotification(
+          creator.fcmToken,
+          {
+            title: 'Ticket Status Updated',
+            body: notificationBody,
+          },
+          {
             ...notificationData,
             locationText: residenceLocation,
-          },
-        },
-        notificationData
-      );
+          }
+        );
+        if (fcmResult.success) {
+          console.log(`✅ [NOTIFICATION] FCM push SUCCESS to resident ${creator._id.toString()}`);
+          console.log(`✅ [NOTIFICATION] FCM Message ID: ${fcmResult.messageId}`);
+        } else {
+          console.error(`❌ [NOTIFICATION] FCM push FAILED to resident ${creator._id.toString()}`);
+          console.error(`❌ [NOTIFICATION] FCM Error: ${fcmResult.message}`);
+          if (fcmResult.shouldRemove) {
+            console.error(`⚠️ [NOTIFICATION] ACTION REQUIRED: Remove invalid FCM token from user ${creator._id.toString()}`);
+          }
+        }
+      } catch (fcmError) {
+        console.error(`❌ [NOTIFICATION] FCM push EXCEPTION for resident ${creator._id.toString()}:`, fcmError);
+        console.error(`❌ [NOTIFICATION] Exception message: ${fcmError.message}`);
+        console.error(`❌ [NOTIFICATION] Exception stack:`, fcmError.stack);
+      }
+    } else {
+      console.warn(`⚠️ [NOTIFICATION] WARNING: No FCM token for resident ${creator._id.toString()}`);
+      console.warn(`⚠️ [NOTIFICATION] Resident must update FCM token in app settings`);
     }
 
-    if (creator.email && creator.notificationPreferences?.email) {
-      await sendComplaintStatusUpdateEmail(creator, complaint, oldStatus, newStatus);
+    // Always send email notification for status changes (important updates)
+    if (creator.email) {
+      try {
+        await sendComplaintStatusUpdateEmail(creator, complaint, oldStatus, newStatus);
+        console.log(`✅ [NOTIFICATION] Email notification sent to resident ${creator.email}`);
+      } catch (emailError) {
+        console.error(`❌ [NOTIFICATION] Email notification failed:`, emailError.message);
+      }
+    } else {
+      console.log(`⚠️ [NOTIFICATION] No email address for resident ${creator._id.toString()}`);
     }
 
     // 2. Notify assigned staff if exists
@@ -287,24 +434,88 @@ const notifyStatusUpdate = async (complaint, oldStatus, newStatus, updatedBy, op
       }
     }
 
-    // 3. Notify admins with complete location information
+    // 3. Notify all admins from the same apartment with complete location information
+    const admins = await User.find({ 
+      role: 'admin', 
+      status: 'active',
+      apartmentCode: creator.apartmentCode // Only notify admins from same apartment
+    });
+
+    for (const admin of admins) {
+      // Send socket notification to all admins (including the one who made the change for record keeping)
+      if (updater && updater.role === 'admin' && admin._id.toString() === updater._id.toString()) {
+        // Send confirmation to the admin who made the change
+        emitToUser(admin._id.toString(), 'status_change_confirmation', {
+          ...notificationData,
+          message: `You changed ticket ${complaint.ticketNumber} status from ${oldStatus} to ${newStatus}`,
+        });
+      } else {
+        // Socket notification to other admins
+        emitToUser(admin._id.toString(), 'ticket_status_updated', {
+          ...notificationData,
+          message: `Ticket ${complaint.ticketNumber} status changed to ${newStatus} by ${updatedByName}`,
+          location: residenceLocation,
+        });
+      }
+
+      // Always send FCM push notification to admin (important updates)
+      if (admin.fcmToken) {
+        try {
+          await sendPushNotification(
+            admin.fcmToken,
+            {
+              title: '📝 Complaint Status Updated',
+              body: `Ticket #${complaint.ticketNumber}\n${oldStatus} → ${newStatus}\n${residenceLocation}`,
+            },
+            {
+              ...notificationData,
+              type: 'ticket_status_updated',
+              referenceId: complaint.ticketNumber,
+              status: newStatus,
+              dateTime: new Date(updatedAt).toLocaleString('en-IN', { 
+                timeZone: 'Asia/Kolkata',
+                dateStyle: 'medium',
+                timeStyle: 'short'
+              }),
+              formattedDate: new Date(updatedAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }),
+              formattedTime: new Date(updatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }),
+              locationText: residenceLocation,
+            }
+          );
+          console.log(`✅ [NOTIFICATION] FCM push sent to admin ${admin._id.toString()}`);
+        } catch (fcmError) {
+          console.error(`❌ [NOTIFICATION] FCM push failed for admin ${admin._id.toString()}:`, fcmError.message);
+        }
+      }
+
+      // Always send email notification to admin (important updates)
+      if (admin.email) {
+        try {
+          await sendAdminComplaintStatusChangeEmail(
+            admin.email, 
+            complaint, 
+            oldStatus, 
+            newStatus, 
+            updatedByName, 
+            residenceLocation
+          );
+          console.log(`✅ [NOTIFICATION] Email sent to admin ${admin.email}`);
+        } catch (emailError) {
+          console.error(`❌ [NOTIFICATION] Email failed for admin ${admin.email}:`, emailError.message);
+        }
+      }
+    }
+
+    // Also broadcast to admin room
     emitToRoom('admin', 'ticket_status_updated', {
       ...notificationData,
       message: `Ticket ${complaint.ticketNumber} status changed to ${newStatus} by ${updatedByName}`,
+      location: residenceLocation,
     });
 
-    // Also emit to individual admin who made the change (if admin)
-    if (updater && updater.role === 'admin') {
-      emitToUser(updater._id.toString(), 'status_change_confirmation', {
-        ...notificationData,
-        message: `You changed ticket ${complaint.ticketNumber} status from ${oldStatus} to ${newStatus}`,
-      });
-    }
-
     console.log(`✅ [NOTIFICATION] Status update notifications sent for ${complaint.ticketNumber}`);
-    console.log(`✅ [NOTIFICATION] Resident ${creator._id.toString()} notified via socket`);
-    console.log(`✅ [NOTIFICATION] Push notification ${creator.fcmToken ? 'sent' : 'skipped (no FCM token)'}`);
-    console.log(`✅ [NOTIFICATION] Email notification ${creator.email && creator.notificationPreferences?.email ? 'sent' : 'skipped'}`);
+    console.log(`✅ [NOTIFICATION] Resident ${creator._id.toString()} notified via socket + FCM + Email`);
+    console.log(`✅ [NOTIFICATION] ${admins.length} admin(s) notified via socket + FCM + Email`);
   } catch (error) {
     console.error('❌ [NOTIFICATION] Error sending status update notifications:', error);
     console.error('❌ [NOTIFICATION] Error stack:', error.stack);

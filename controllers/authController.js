@@ -3,6 +3,7 @@
   const Apartment = require('../models/Apartment');
   const { generateToken } = require('../middleware/auth');
   const { sendOTP: sendSMSOTP } = require('../services/smsService');
+  const { sendOTPEmail, sendWelcomeEmail } = require('../services/emailService');
   const { emitToUser } = require('../services/socketService');
 
   // @desc    Send OTP for registration/login
@@ -13,44 +14,119 @@
       console.log('📨 [AUTH] Send OTP request received');
       console.log('📨 [AUTH] Request body:', JSON.stringify(req.body, null, 2));
       
-      const { phoneNumber, purpose } = req.body;
+      const { phoneNumber, purpose, email } = req.body;
 
-      console.log(`📱 [AUTH] Phone: ${phoneNumber}, Purpose: ${purpose}`);
+      console.log(`📱 [AUTH] Phone: ${phoneNumber || 'not provided'}, Purpose: ${purpose}, Email: ${email || 'not provided'}`);
       
-      // Validate phone number format
-      const phoneRegex = /^[6-9]\d{9}$/;
-      if (!phoneRegex.test(phoneNumber)) {
-        console.log('❌ [AUTH] Invalid phone number format');
-        return res.status(400).json({
-          success: false,
-          message: 'Please provide a valid Indian phone number'
-        });
-      }
-      console.log('✅ [AUTH] Phone number format valid');
-
-      // Check if user already exists for registration
+      // For registration: require email, skip phone
       if (purpose === 'registration') {
+        if (!email || !email.trim()) {
+          console.log('❌ [AUTH] Email is required for registration');
+          return res.status(400).json({
+            success: false,
+            message: 'Email is required for registration'
+          });
+        }
+
+        // Validate email format
+        const emailRegex = /^\S+@\S+\.\S+$/;
+        const trimmedEmail = email.trim().toLowerCase();
+        if (!emailRegex.test(trimmedEmail)) {
+          console.log('❌ [AUTH] Invalid email format');
+          return res.status(400).json({
+            success: false,
+            message: 'Please provide a valid email address'
+          });
+        }
+        console.log('✅ [AUTH] Email format valid');
+
+        // Check if user already exists with this email
         console.log('🔍 [AUTH] Checking for existing user (registration)...');
-        const existingUser = await User.findOne({ phoneNumber });
+        const existingUser = await User.findOne({ email: trimmedEmail });
         if (existingUser) {
-          console.log('❌ [AUTH] User already exists');
+          console.log('❌ [AUTH] User already exists with this email');
           return res.status(409).json({
             success: false,
-            message: 'User already exists with this phone number'
+            message: 'User already exists with this email address'
           });
         }
         console.log('✅ [AUTH] User does not exist - can register');
+      } else if (purpose === 'forgot-password') {
+        // For forgot-password: require email, skip phone
+        if (!email || !email.trim()) {
+          console.log('❌ [AUTH] Email is required for forgot password');
+          return res.status(400).json({
+            success: false,
+            message: 'Email is required for forgot password'
+          });
+        }
+
+        // Validate email format
+        const emailRegex = /^\S+@\S+\.\S+$/;
+        const trimmedEmail = email.trim().toLowerCase();
+        if (!emailRegex.test(trimmedEmail)) {
+          console.log('❌ [AUTH] Invalid email format');
+          return res.status(400).json({
+            success: false,
+            message: 'Please provide a valid email address'
+          });
+        }
+        console.log('✅ [AUTH] Email format valid');
+
+        // Check if user exists
+        console.log('🔍 [AUTH] Checking for existing user (forgot password)...');
+        const existingUser = await User.findOne({ email: trimmedEmail });
+        if (!existingUser) {
+          console.log('❌ [AUTH] No account found with this email');
+          return res.status(404).json({
+            success: false,
+            message: 'No account found with this email address. Please register first.'
+          });
+        }
+        
+        // Check if account is active
+        if (existingUser.status !== 'active') {
+          console.log('❌ [AUTH] Account is not active');
+          return res.status(403).json({
+            success: false,
+            message: 'Account is not active. Please contact support.'
+          });
+        }
+        
+        console.log(`✅ [AUTH] User found with email: ${existingUser._id}`);
+      } else {
+        // For other purposes (login, admin_registration): require email
+        if (!email || !email.trim()) {
+          console.log('❌ [AUTH] Email is required for login and admin registration');
+          return res.status(400).json({
+            success: false,
+            message: 'Email is required for login and admin registration'
+          });
+        }
+
+        // Validate email format
+        const emailRegex = /^\S+@\S+\.\S+$/;
+        const trimmedEmail = email.trim().toLowerCase();
+        if (!emailRegex.test(trimmedEmail)) {
+          console.log('❌ [AUTH] Invalid email format');
+          return res.status(400).json({
+            success: false,
+            message: 'Please provide a valid email address'
+          });
+        }
+        console.log('✅ [AUTH] Email format valid');
       }
 
       // Check if admin already exists for admin registration
       if (purpose === 'admin_registration') {
+        const trimmedEmail = email.trim().toLowerCase();
         console.log('🔍 [AUTH] Checking for existing admin (admin_registration)...');
-        const existingAdmin = await User.findOne({ phoneNumber, role: 'admin' });
+        const existingAdmin = await User.findOne({ email: trimmedEmail, role: 'admin' });
         if (existingAdmin) {
           console.log('❌ [AUTH] Admin already exists');
           return res.status(409).json({
             success: false,
-            message: 'Admin already exists with this phone number'
+            message: 'Admin already exists with this email address'
           });
         }
         console.log('✅ [AUTH] Admin does not exist - can register');
@@ -58,13 +134,14 @@
 
       // Check if user exists for login
       if (purpose === 'login') {
+        const trimmedEmail = email.trim().toLowerCase();
         console.log('🔍 [AUTH] Checking for existing user (login)...');
-        const user = await User.findOne({ phoneNumber, status: 'active' });
+        const user = await User.findOne({ email: trimmedEmail, status: 'active' });
         if (!user) {
           console.log('❌ [AUTH] User not found or not active');
           return res.status(404).json({
             success: false,
-            message: 'No account found with this phone number'
+            message: 'No account found with this email address'
           });
         }
         console.log(`✅ [AUTH] User found: ${user._id}`);
@@ -72,29 +149,70 @@
 
       // Generate and save OTP
       console.log('🔐 [AUTH] Generating OTP...');
-      const otpRecord = await OTP.generateOTP(phoneNumber, purpose);
-      console.log(`✅ [AUTH] OTP generated: ${otpRecord.otp}`);
-
-      // Send OTP via SMS
-      console.log('📲 [AUTH] Sending OTP via SMS...');
-      const smsResult = await sendSMSOTP(phoneNumber, otpRecord.otp);
+      let otpRecord;
+      let identifier;
       
-      if (!smsResult.success) {
-        console.warn('⚠️ [AUTH] SMS sending failed, but OTP is still valid:', smsResult.message);
-        // Don't fail the request if SMS fails - OTP is still generated and can be verified
-        // In development, we log the OTP anyway
-        // If it's a trial account verification issue, include OTP in the message
-        if (smsResult.error && smsResult.error.includes('unverified')) {
-          console.log(`📲 [AUTH] ⚠️ Trial account: Phone number needs verification. OTP code: ${otpRecord.otp}`);
-          console.log(`📲 [AUTH] Verify at: https://console.twilio.com/us1/develop/phone-numbers/manage/verified`);
+      if (purpose === 'registration' || purpose === 'forgot-password') {
+        // For registration and forgot-password: use email-based OTP
+        const trimmedEmail = email.trim().toLowerCase();
+        identifier = trimmedEmail;
+        otpRecord = await OTP.generateOTP(trimmedEmail, purpose, 'email');
+        console.log(`✅ [AUTH] Email-based OTP generated: ${otpRecord.otp}`);
+        
+        // Send OTP via Email ONLY (no SMS for registration/forgot-password)
+        console.log(`📧 [AUTH] Sending OTP via Email to: ${trimmedEmail}`);
+        try {
+          const emailResult = await sendOTPEmail(trimmedEmail, otpRecord.otp, purpose);
+          if (emailResult.success) {
+            console.log(`✅ [AUTH] OTP Email sent successfully to ${trimmedEmail}`);
+            console.log(`📧 [AUTH] Email Message ID: ${emailResult.messageId || 'N/A'}`);
+          } else {
+            console.error(`❌ [AUTH] Email sending failed: ${emailResult.message}`);
+            return res.status(500).json({
+              success: false,
+              message: 'Failed to send OTP email. Please try again.'
+            });
+          }
+        } catch (emailError) {
+          console.error(`❌ [AUTH] Email sending error:`, emailError.message);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to send OTP email. Please try again.'
+          });
         }
       } else {
-        console.log('✅ [AUTH] SMS sent successfully:', smsResult.message);
+        // For other purposes (login, admin_registration): use email-based OTP
+        const trimmedEmail = email.trim().toLowerCase();
+        identifier = trimmedEmail;
+        otpRecord = await OTP.generateOTP(trimmedEmail, purpose, 'email');
+        console.log(`✅ [AUTH] Email-based OTP generated: ${otpRecord.otp}`);
+        
+        // Send OTP via Email ONLY (no SMS for login/admin_registration)
+        console.log(`📧 [AUTH] Sending OTP via Email to: ${trimmedEmail}`);
+        try {
+          const emailResult = await sendOTPEmail(trimmedEmail, otpRecord.otp, purpose);
+          if (emailResult.success) {
+            console.log(`✅ [AUTH] OTP Email sent successfully to ${trimmedEmail}`);
+            console.log(`📧 [AUTH] Email Message ID: ${emailResult.messageId || 'N/A'}`);
+          } else {
+            console.error(`❌ [AUTH] Email sending failed: ${emailResult.message}`);
+            return res.status(500).json({
+              success: false,
+              message: 'Failed to send OTP email. Please try again.'
+            });
+          }
+        } catch (emailError) {
+          console.error(`❌ [AUTH] Email sending error:`, emailError.message);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to send OTP email. Please try again.'
+          });
+        }
       }
       
       // In development, always log the OTP for testing
       if (process.env.NODE_ENV !== 'production') {
-        console.log(`📲 [AUTH] OTP for ${phoneNumber}: ${otpRecord.otp}`);
+        console.log(`📧 [AUTH] OTP for ${identifier}: ${otpRecord.otp}`);
       }
 
       console.log('✅ [AUTH] OTP sent successfully');
@@ -102,7 +220,7 @@
         success: true,
         message: 'OTP sent successfully',
         data: {
-          phoneNumber,
+          email: identifier, // All purposes now use email
           purpose,
           // Don't send OTP in response in production
           ...(process.env.NODE_ENV !== 'production' && { otp: otpRecord.otp })
@@ -129,7 +247,7 @@
       console.log('📝 [AUTH] Request body:', JSON.stringify(req.body, null, 2));
       console.log('📝 [AUTH] Request headers:', JSON.stringify(req.headers, null, 2));
       
-      const { phoneNumber, otp, userData } = req.body;
+      const { phoneNumber, email, otp, userData } = req.body;
       
       // Log userData details
       if (userData) {
@@ -144,18 +262,28 @@
         console.log('📝 [AUTH] - password value (first 5 chars):', userData.password ? String(userData.password).substring(0, Math.min(5, String(userData.password).length)) : 'undefined');
       }
 
+      // For registration: require email, not phoneNumber
+      const registrationEmail = email || (userData && userData.email);
+      if (!registrationEmail || !registrationEmail.trim()) {
+        console.log('❌ [AUTH] Email is required for registration');
+        return res.status(400).json({
+          success: false,
+          message: 'Email is required for registration'
+        });
+      }
+
       // Validate required fields
-      if (!phoneNumber || !otp || !userData) {
+      if (!otp || !userData) {
         console.log('❌ [AUTH] Missing required fields:', { 
-          phoneNumber: !!phoneNumber, 
+          email: !!registrationEmail,
           otp: !!otp, 
           userData: !!userData 
         });
         return res.status(400).json({
           success: false,
-          message: 'Missing required fields',
+          message: 'Missing required fields: email, otp, and userData are required',
           details: {
-            phoneNumber: !!phoneNumber,
+            email: !!registrationEmail,
             otp: !!otp,
             userData: !!userData
           }
@@ -200,17 +328,18 @@
         });
       }
 
-      // Verify OTP
-      console.log('🔐 Verifying OTP...');
-      const otpVerification = await OTP.verifyOTP(phoneNumber, otp, 'registration');
+      // Verify OTP using email (registration uses email-based OTP)
+      const trimmedEmail = registrationEmail.trim().toLowerCase();
+      console.log('🔐 [AUTH] Verifying OTP for email:', trimmedEmail);
+      const otpVerification = await OTP.verifyOTP(trimmedEmail, otp, 'registration', 'email');
       if (!otpVerification.isValid) {
-        console.log('❌ OTP verification failed:', otpVerification.message);
+        console.log('❌ [AUTH] OTP verification failed:', otpVerification.message);
         return res.status(400).json({
           success: false,
           message: otpVerification.message
         });
       }
-      console.log('✅ OTP verified successfully');
+      console.log('✅ [AUTH] OTP verified successfully');
 
       // Role-based validation
       let apartment = null;
@@ -387,9 +516,21 @@
         firstChars: password.substring(0, Math.min(5, password.length))
       });
       
+      // For registration: email is required, phoneNumber from userData (optional but recommended)
+      const userPhoneNumber = userData.phoneNumber || phoneNumber || '';
+      
+      if (!userPhoneNumber || userPhoneNumber.trim() === '') {
+        console.log('❌ [AUTH] Phone number is required for user account');
+        return res.status(400).json({
+          success: false,
+          message: 'Phone number is required for user account'
+        });
+      }
+
       const userToCreate = {
         fullName: userData.fullName.trim(),
-        phoneNumber: phoneNumber.trim(),
+        phoneNumber: userPhoneNumber.trim(),
+        email: trimmedEmail, // Email is required for registration (used for OTP)
         role,
         password: password, // Use password as-is (no validation, no trimming)
         status: role === 'admin' ? 'active' : 'pending', // Admin is auto-active, others need approval
@@ -400,11 +541,6 @@
         ...userToCreate,
         password: '***HIDDEN***'
       });
-
-      // Add email if provided
-      if (userData.email && userData.email.trim() !== '') {
-        userToCreate.email = userData.email.trim().toLowerCase();
-      }
 
       // Add apartment code only if not admin
       if (role !== 'admin' && userData.apartmentCode) {
@@ -482,6 +618,22 @@
             }
           });
         });
+      }
+
+      // Send welcome email if email is available
+      if (user.email) {
+        console.log('📧 [AUTH] Sending welcome email...');
+        try {
+          const emailResult = await sendWelcomeEmail(user);
+          if (emailResult.success) {
+            console.log('✅ [AUTH] Welcome email sent successfully');
+          } else {
+            console.warn('⚠️ [AUTH] Welcome email sending failed (non-fatal):', emailResult.message);
+          }
+        } catch (emailError) {
+          console.warn('⚠️ [AUTH] Welcome email sending error (non-fatal):', emailError.message);
+          // Don't fail the request if email fails
+        }
       }
 
       // Prepare response data
@@ -585,19 +737,30 @@
       console.log('🔑 [AUTH] OTP Login request received');
       console.log('🔑 [AUTH] Request body:', JSON.stringify({ ...req.body, otp: '***' }, null, 2));
       
-      const { phoneNumber, otp } = req.body;
+      const { email, otp } = req.body;
 
-      if (!phoneNumber || !otp) {
-        console.log('❌ [AUTH] Missing phone number or OTP');
+      if (!email || !otp) {
+        console.log('❌ [AUTH] Missing email or OTP');
         return res.status(400).json({
           success: false,
-          message: 'Phone number and OTP are required'
+          message: 'Email and OTP are required'
+        });
+      }
+
+      // Validate email format
+      const emailRegex = /^\S+@\S+\.\S+$/;
+      const trimmedEmail = email.trim().toLowerCase();
+      if (!emailRegex.test(trimmedEmail)) {
+        console.log('❌ [AUTH] Invalid email format');
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email address'
         });
       }
 
       // Verify OTP
       console.log('🔐 [AUTH] Verifying OTP...');
-      const otpVerification = await OTP.verifyOTP(phoneNumber, otp, 'login');
+      const otpVerification = await OTP.verifyOTP(trimmedEmail, otp, 'login', 'email');
       if (!otpVerification.isValid) {
         console.log('❌ [AUTH] OTP verification failed:', otpVerification.message);
         return res.status(400).json({
@@ -609,7 +772,7 @@
 
       // Get user
       console.log('🔍 [AUTH] Finding user...');
-      const user = await User.findOne({ phoneNumber, status: 'active' });
+      const user = await User.findOne({ email: trimmedEmail, status: 'active' });
       if (!user) {
         console.log('❌ [AUTH] User not found or account not active');
         return res.status(404).json({
@@ -703,17 +866,44 @@
 
       // Determine if identifier is email or phone
       const isEmail = identifier.includes('@');
-      const query = isEmail 
-        ? { email: identifier.toLowerCase(), status: 'active' }
-        : { phoneNumber: identifier, status: 'active' };
+      const trimmedIdentifier = isEmail ? identifier.trim().toLowerCase() : identifier.trim();
+      
+      // First check if user exists (any status)
+      console.log('🔍 [AUTH] Checking if user exists...');
+      const baseQuery = isEmail 
+        ? { email: trimmedIdentifier }
+        : { phoneNumber: trimmedIdentifier };
+      
+      const anyUser = await User.findOne(baseQuery);
+      
+      if (!anyUser) {
+        console.log('❌ [AUTH] No account found with this identifier');
+        return res.status(404).json({
+          success: false,
+          message: 'Account not found. Please register first.'
+        });
+      }
 
-      // Get user with password
-      console.log('🔍 [AUTH] Finding user...');
-      const user = await User.findOne(query)
+      // Check if account is active
+      if (anyUser.status !== 'active') {
+        console.log('❌ [AUTH] Account is not active');
+        return res.status(403).json({
+          success: false,
+          message: 'Account is not active. Please contact support or wait for admin approval.'
+        });
+      }
+
+      // Get user with password for verification
+      console.log('🔍 [AUTH] Finding user with password...');
+      const activeQuery = isEmail 
+        ? { email: trimmedIdentifier, status: 'active' }
+        : { phoneNumber: trimmedIdentifier, status: 'active' };
+      
+      const user = await User.findOne(activeQuery)
         .select('+password +loginAttempts +lockUntil');
 
       if (!user) {
-        console.log('❌ [AUTH] User not found or account not active');
+        console.log('❌ [AUTH] User not found (should not happen)');
         return res.status(401).json({
           success: false,
           message: 'Invalid credentials'
@@ -726,7 +916,7 @@
         console.log('🔒 [AUTH] Account is locked');
         return res.status(423).json({
           success: false,
-          message: 'Account temporarily locked due to too many failed attempts'
+          message: 'Account temporarily locked due to too many failed attempts. Please try again later.'
         });
       }
 
@@ -740,7 +930,7 @@
         
         return res.status(401).json({
           success: false,
-          message: 'Invalid credentials'
+          message: 'Incorrect password. Please try again.'
         });
       }
       console.log('✅ [AUTH] Password verified');
@@ -842,27 +1032,68 @@
       console.log('👔 [AUTH] Admin Login request received');
       console.log('👔 [AUTH] Request body:', JSON.stringify({ ...req.body, password: '***' }, null, 2));
       
-      const { phoneNumber, password } = req.body;
+      const { email, password } = req.body;
 
       // Validate input
-      if (!phoneNumber || !password) {
-        console.log('❌ [AUTH] Missing phone number or password');
+      if (!email || !password) {
+        console.log('❌ [AUTH] Missing email or password');
         return res.status(400).json({
           success: false,
-          message: 'Please provide phone number and password'
+          message: 'Please provide email and password'
         });
       }
 
-      // Get admin user with password
-      console.log('🔍 [AUTH] Finding admin user...');
+      // Validate email format
+      const emailRegex = /^\S+@\S+\.\S+$/;
+      const trimmedEmail = email.trim().toLowerCase();
+      if (!emailRegex.test(trimmedEmail)) {
+        console.log('❌ [AUTH] Invalid email format');
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email address'
+        });
+      }
+
+      // First check if user exists with this email (any role/status)
+      console.log('🔍 [AUTH] Checking if user exists with this email...');
+      const anyUser = await User.findOne({ email: trimmedEmail });
+      
+      if (!anyUser) {
+        console.log('❌ [AUTH] No account found with this email');
+        return res.status(404).json({
+          success: false,
+          message: 'Account not found. Please register first.'
+        });
+      }
+
+      // Check if user is admin
+      if (anyUser.role !== 'admin') {
+        console.log('❌ [AUTH] User exists but is not an admin');
+        return res.status(403).json({
+          success: false,
+          message: 'This email is not registered as an admin. Please use the correct login page.'
+        });
+      }
+
+      // Check if admin account is active
+      if (anyUser.status !== 'active') {
+        console.log('❌ [AUTH] Admin account is not active');
+        return res.status(403).json({
+          success: false,
+          message: 'Account is not active. Please contact support.'
+        });
+      }
+
+      // Get admin user with password for verification
+      console.log('🔍 [AUTH] Finding admin user with password...');
       const user = await User.findOne({ 
-        phoneNumber, 
+        email: trimmedEmail, 
         role: 'admin',
         status: 'active' 
       }).select('+password +loginAttempts +lockUntil');
 
       if (!user) {
-        console.log('❌ [AUTH] Admin not found or not active');
+        console.log('❌ [AUTH] Admin not found (should not happen)');
         return res.status(401).json({
           success: false,
           message: 'Invalid credentials'
@@ -875,7 +1106,7 @@
         console.log('🔒 [AUTH] Account is locked');
         return res.status(423).json({
           success: false,
-          message: 'Account temporarily locked due to too many failed attempts'
+          message: 'Account temporarily locked due to too many failed attempts. Please try again later.'
         });
       }
 
@@ -888,7 +1119,7 @@
         
         return res.status(401).json({
           success: false,
-          message: 'Invalid credentials'
+          message: 'Incorrect password. Please try again.'
         });
       }
       console.log('✅ [AUTH] Password verified');
@@ -953,30 +1184,43 @@
       console.log('👔 [AUTH] Admin Register with OTP request received');
       console.log('👔 [AUTH] Request body:', JSON.stringify({ ...req.body, password: '***', otp: '***' }, null, 2));
       
-      const { phoneNumber, password, fullName, email, otp } = req.body;
+      const { email, password, fullName, phoneNumber, otp } = req.body;
 
       // Validate required fields
-      if (!phoneNumber || !password || !fullName || !otp) {
+      if (!email || !password || !fullName || !otp) {
         console.log('❌ [AUTH] Missing required fields');
         return res.status(400).json({
           success: false,
-          message: 'Phone number, password, full name, and OTP are required'
+          message: 'Email, password, full name, and OTP are required'
         });
       }
 
-      // Validate phone number format
-      const phoneRegex = /^[6-9]\d{9}$/;
-      if (!phoneRegex.test(phoneNumber)) {
-        console.log('❌ [AUTH] Invalid phone number format');
+      // Validate email format
+      const emailRegex = /^\S+@\S+\.\S+$/;
+      const trimmedEmail = email.trim().toLowerCase();
+      if (!emailRegex.test(trimmedEmail)) {
+        console.log('❌ [AUTH] Invalid email format');
         return res.status(400).json({
           success: false,
-          message: 'Please provide a valid Indian phone number'
+          message: 'Please provide a valid email address'
         });
+      }
+
+      // Validate phone number format if provided
+      if (phoneNumber) {
+        const phoneRegex = /^[6-9]\d{9}$/;
+        if (!phoneRegex.test(phoneNumber)) {
+          console.log('❌ [AUTH] Invalid phone number format');
+          return res.status(400).json({
+            success: false,
+            message: 'Please provide a valid Indian phone number'
+          });
+        }
       }
 
       // Verify OTP
       console.log('🔐 [AUTH] Verifying OTP...');
-      const otpVerification = await OTP.verifyOTP(phoneNumber, otp, 'admin_registration');
+      const otpVerification = await OTP.verifyOTP(trimmedEmail, otp, 'admin_registration', 'email');
       
       if (!otpVerification.isValid) {
         console.log('❌ [AUTH] OTP verification failed:', otpVerification.message);
@@ -990,7 +1234,7 @@
       // Check if admin already exists
       console.log('🔍 [AUTH] Checking for existing admin...');
       const existingAdmin = await User.findOne({ 
-        phoneNumber, 
+        email: trimmedEmail, 
         role: 'admin' 
       });
       
@@ -998,24 +1242,46 @@
         console.log('❌ [AUTH] Admin already exists');
         return res.status(409).json({
           success: false,
-          message: 'Admin already exists with this phone number'
+          message: 'Admin already exists with this email address'
         });
       }
       console.log('✅ [AUTH] Admin does not exist - can register');
 
       // Create admin user
       console.log('👤 [AUTH] Creating admin user...');
-      const user = await User.create({
+      const userData = {
         fullName: fullName.trim(),
-        phoneNumber: phoneNumber.trim(),
-        email: email ? email.trim().toLowerCase() : undefined,
+        email: trimmedEmail,
         password: String(password),
         role: 'admin',
         status: 'active', // Admin is auto-active
         isVerified: true
-      });
+      };
+      
+      // Add phone number if provided
+      if (phoneNumber) {
+        userData.phoneNumber = phoneNumber.trim();
+      }
+      
+      const user = await User.create(userData);
 
       console.log(`✅ [AUTH] Admin created successfully: ${user._id}`);
+
+      // Send welcome email if email is available
+      if (user.email) {
+        console.log('📧 [AUTH] Sending admin welcome email...');
+        try {
+          const emailResult = await sendAdminWelcomeEmail(user);
+          if (emailResult.success) {
+            console.log('✅ [AUTH] Admin welcome email sent successfully');
+          } else {
+            console.warn('⚠️ [AUTH] Admin welcome email sending failed (non-fatal):', emailResult.message);
+          }
+        } catch (emailError) {
+          console.warn('⚠️ [AUTH] Admin welcome email sending error (non-fatal):', emailError.message);
+          // Don't fail the request if email fails
+        }
+      }
 
       // Generate token
       console.log('🎫 [AUTH] Generating token...');
@@ -1054,7 +1320,7 @@
         console.log('❌ [AUTH] Duplicate key error - admin already exists');
         return res.status(409).json({
           success: false,
-          message: 'Admin already exists with this phone number'
+          message: 'Admin already exists with this email address'
         });
       }
 
@@ -1085,6 +1351,93 @@
     });
   };
 
+  // @desc    Verify OTP and reset password
+  // @route   POST /api/auth/verify-otp-reset-password
+  // @access  Public
+  const verifyOTPAndResetPassword = async (req, res) => {
+    try {
+      console.log('🔐 [AUTH] Reset Password request received');
+      console.log('🔐 [AUTH] Request body:', JSON.stringify({ ...req.body, otp: '***', newPassword: '***' }, null, 2));
+      
+      const { email, otp, newPassword } = req.body;
+
+      // Validate required fields
+      if (!email || !otp || !newPassword) {
+        console.log('❌ [AUTH] Missing required fields');
+        return res.status(400).json({
+          success: false,
+          message: 'Email, OTP, and new password are required'
+        });
+      }
+
+      // Validate email format
+      const emailRegex = /^\S+@\S+\.\S+$/;
+      const trimmedEmail = email.trim().toLowerCase();
+      if (!emailRegex.test(trimmedEmail)) {
+        console.log('❌ [AUTH] Invalid email format');
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email address'
+        });
+      }
+
+      // Validate password
+      if (typeof newPassword !== 'string' || newPassword.trim() === '') {
+        console.log('❌ [AUTH] Password is required');
+        return res.status(400).json({
+          success: false,
+          message: 'Password is required'
+        });
+      }
+
+      // Find user by email
+      console.log('🔍 [AUTH] Finding user by email...');
+      const user = await User.findOne({ email: trimmedEmail, status: 'active' });
+      if (!user) {
+        console.log('❌ [AUTH] User not found');
+        // Don't reveal if user exists for security
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or expired OTP'
+        });
+      }
+      console.log(`✅ [AUTH] User found: ${user._id}`);
+
+      // Verify OTP
+      console.log('🔐 [AUTH] Verifying OTP...');
+      const otpVerification = await OTP.verifyOTP(trimmedEmail, otp, 'forgot-password', 'email');
+      if (!otpVerification.isValid) {
+        console.log('❌ [AUTH] OTP verification failed:', otpVerification.message);
+        return res.status(400).json({
+          success: false,
+          message: otpVerification.message
+        });
+      }
+      console.log('✅ [AUTH] OTP verified successfully');
+
+      // Update password
+      console.log('🔐 [AUTH] Updating password...');
+      user.password = String(newPassword);
+      await user.save();
+      console.log('✅ [AUTH] Password updated successfully');
+
+      console.log('✅ [AUTH] Password reset successful');
+      res.status(200).json({
+        success: true,
+        message: 'Password reset successfully. You can now login with your new password.'
+      });
+
+    } catch (error) {
+      console.error('❌ [AUTH] Reset Password error:', error);
+      console.error('❌ [AUTH] Error stack:', error.stack);
+      res.status(500).json({
+        success: false,
+        message: 'Password reset failed',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  };
+
   module.exports = {
     sendOTP,
     verifyOTPAndRegister,
@@ -1093,5 +1446,6 @@
     getMe,
     adminLogin,
     adminRegister,
-    verifyOTPAndAdminRegister
+    verifyOTPAndAdminRegister,
+    verifyOTPAndResetPassword
   };
