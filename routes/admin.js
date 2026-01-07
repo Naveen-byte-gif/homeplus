@@ -8,9 +8,12 @@ const {
   getAllComplaints,
   assignComplaintToStaff,
   getAllStaff,
+  onboardStaff,
   createApartment,
   createBuilding,
   createUser,
+  requestOTPForUserCreation,
+  verifyOTPAndCreateUser,
   getAllUsers,
   getBuildingDetails,
   getAvailableFlats,
@@ -60,6 +63,7 @@ router.post('/complaints/:id/reopen', reopenTicket);
 
 // Staff management
 router.get('/staff', getAllStaff);
+router.post('/staff/onboard', onboardStaff);
 
 // Building/Apartment management
 router.get('/buildings', getAllBuildings);
@@ -70,7 +74,9 @@ router.get('/building-view', getBuildingView); // Role-based building view
 router.get('/available-flats', getAvailableFlats);
 
 // User management
-router.post('/users', createUser);
+router.post('/users/request-otp', requestOTPForUserCreation);
+router.post('/users/verify-otp-create', verifyOTPAndCreateUser);
+router.post('/users', createUser); // Keep for backward compatibility
 router.get('/users', getAllUsers);
 
 // Resident management (advanced)

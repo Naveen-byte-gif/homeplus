@@ -189,31 +189,66 @@ const changePassword = async (req, res) => {
 // @route   POST /api/users/fcm-token
 // @access  Private
 const updateFCMToken = async (req, res) => {
+  console.log('\n📱 ========== [FCM TOKEN] UPDATE REQUEST ==========');
+  console.log(`📱 [FCM TOKEN] Timestamp: ${new Date().toISOString()}`);
+  
   try {
     const userId = req.user.id;
     const { fcmToken } = req.body;
 
+    console.log(`📱 [FCM TOKEN] User ID: ${userId}`);
+    console.log(`📱 [FCM TOKEN] Token received: ${fcmToken ? 'YES' : 'NO'}`);
+    console.log(`📱 [FCM TOKEN] Token type: ${typeof fcmToken}`);
+    console.log(`📱 [FCM TOKEN] Token length: ${fcmToken ? fcmToken.length : 'null'}`);
+    console.log(`📱 [FCM TOKEN] Token preview: ${fcmToken ? fcmToken.substring(0, 50) + '...' : 'null'}`);
+
     if (!fcmToken) {
+      console.error(`❌ [FCM TOKEN] ERROR: FCM token is missing in request body`);
       return res.status(400).json({
         success: false,
         message: 'FCM token is required'
       });
     }
 
+    // Check if token is valid format (FCM tokens are usually long strings)
+    if (typeof fcmToken !== 'string' || fcmToken.trim().length < 10) {
+      console.error(`❌ [FCM TOKEN] ERROR: Invalid token format`);
+      console.error(`❌ [FCM TOKEN] Token too short or invalid type`);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid FCM token format'
+      });
+    }
+
+    // Get old token for comparison
+    const oldUser = await User.findById(userId).select('fcmToken email fullName');
+    const oldToken = oldUser?.fcmToken;
+    
+    console.log(`📱 [FCM TOKEN] Old token exists: ${oldToken ? 'YES' : 'NO'}`);
+    if (oldToken) {
+      console.log(`📱 [FCM TOKEN] Old token preview: ${oldToken.substring(0, 50)}...`);
+      console.log(`📱 [FCM TOKEN] Token changed: ${oldToken !== fcmToken ? 'YES' : 'NO'}`);
+    }
+
     const user = await User.findByIdAndUpdate(
       userId,
       { fcmToken },
-      { new: true }
+      { new: true, select: 'fcmToken email fullName role' }
     );
 
     if (!user) {
+      console.error(`❌ [FCM TOKEN] ERROR: User ${userId} not found in database`);
       return res.status(404).json({
         success: false,
         message: 'User not found'
       });
     }
 
-    console.log(`✅ FCM token updated for user ${userId}`);
+    console.log(`✅ [FCM TOKEN] SUCCESS: FCM token updated for user ${userId}`);
+    console.log(`✅ [FCM TOKEN] User: ${user.fullName} (${user.email})`);
+    console.log(`✅ [FCM TOKEN] Role: ${user.role}`);
+    console.log(`✅ [FCM TOKEN] New token stored: ${user.fcmToken ? 'YES' : 'NO'}`);
+    console.log(`📱 ========== [FCM TOKEN] UPDATE SUCCESS ==========\n`);
 
     res.status(200).json({
       success: true,

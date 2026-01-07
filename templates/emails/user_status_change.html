@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Status Update - ApartmentSync</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f7fa;
+        }
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 0;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            padding: 40px 30px;
+            text-align: center;
+        }
+        .header.approved {
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white;
+        }
+        .header.rejected {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+        }
+        .header.suspended {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+        }
+        .header.pending {
+            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+            color: white;
+        }
+        .header-icon {
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 40px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 26px;
+            font-weight: 600;
+        }
+        .content {
+            padding: 40px 30px;
+            background: #ffffff;
+        }
+        .greeting {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 20px;
+        }
+        .status-card {
+            border-radius: 12px;
+            padding: 25px;
+            margin: 25px 0;
+            text-align: center;
+        }
+        .status-card.approved {
+            background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+            border: 2px solid #22c55e;
+        }
+        .status-card.rejected {
+            background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+            border: 2px solid #ef4444;
+        }
+        .status-card.suspended {
+            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+            border: 2px solid #f59e0b;
+        }
+        .status-card.pending {
+            background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+            border: 2px solid #6366f1;
+        }
+        .status-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+        .status-label.approved { color: #166534; }
+        .status-label.rejected { color: #991b1b; }
+        .status-label.suspended { color: #92400e; }
+        .status-label.pending { color: #3730a3; }
+        .status-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        .status-value.approved { color: #22c55e; }
+        .status-value.rejected { color: #ef4444; }
+        .status-value.suspended { color: #f59e0b; }
+        .status-value.pending { color: #6366f1; }
+        .status-message {
+            font-size: 14px;
+            color: #64748b;
+        }
+        .timeline {
+            margin: 30px 0;
+            padding: 0;
+            list-style: none;
+        }
+        .timeline-item {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }
+        .timeline-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 15px;
+            margin-top: 5px;
+            flex-shrink: 0;
+        }
+        .timeline-dot.old { background: #94a3b8; }
+        .timeline-dot.new { background: #22c55e; }
+        .timeline-content {
+            flex: 1;
+        }
+        .timeline-label {
+            font-size: 12px;
+            color: #64748b;
+            margin-bottom: 2px;
+        }
+        .timeline-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+        .arrow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 15px 0;
+            color: #94a3b8;
+        }
+        .info-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+        }
+        .info-box h3 {
+            margin: 0 0 15px;
+            font-size: 16px;
+            color: #1e293b;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        .info-label {
+            color: #64748b;
+            font-size: 14px;
+        }
+        .info-value {
+            color: #1e293b;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .reason-box {
+            background: #fef2f2;
+            border-left: 4px solid #ef4444;
+            padding: 15px 20px;
+            margin: 25px 0;
+            border-radius: 8px;
+        }
+        .reason-box h4 {
+            margin: 0 0 10px;
+            color: #991b1b;
+            font-size: 14px;
+        }
+        .reason-box p {
+            margin: 0;
+            color: #7f1d1d;
+            font-size: 14px;
+        }
+        .button {
+            display: inline-block;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            margin: 25px 0;
+            font-weight: 600;
+            font-size: 16px;
+        }
+        .footer {
+            padding: 30px;
+            text-align: center;
+            background: #f8fafc;
+            border-top: 1px solid #e2e8f0;
+            color: #64748b;
+            font-size: 13px;
+        }
+        .footer a {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        @media only screen and (max-width: 600px) {
+            .container {
+                margin: 0;
+                border-radius: 0;
+            }
+            .content {
+                padding: 25px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header {{statusClass}}">
+            <div class="header-icon">{{statusIcon}}</div>
+            <h1>Account Status Update</h1>
+        </div>
+        <div class="content">
+            <div class="greeting">Hello {{fullName}}! 👋</div>
+            
+            <div class="status-card {{statusClass}}">
+                <div class="status-label {{statusClass}}">Current Status</div>
+                <div class="status-value {{statusClass}}">{{newStatus}}</div>
+                <div class="status-message">{{statusMessage}}</div>
+            </div>
+
+            <div style="text-align: center; margin: 25px 0;">
+                <div style="display: inline-flex; align-items: center; gap: 15px;">
+                    <div style="padding: 8px 16px; background: #f1f5f9; border-radius: 20px; color: #64748b; font-size: 14px;">
+                        {{oldStatus}}
+                    </div>
+                    <div style="color: #94a3b8;">→</div>
+                    <div style="padding: 8px 16px; background: {{newStatusBg}}; border-radius: 20px; color: {{newStatusColor}}; font-size: 14px; font-weight: 600;">
+                        {{newStatus}}
+                    </div>
+                </div>
+            </div>
+
+            {{#if reason}}
+            <div class="reason-box">
+                <h4>📋 Reason for Status Change:</h4>
+                <p>{{reason}}</p>
+            </div>
+            {{/if}}
+
+            <div class="info-box">
+                <h3>📋 Your Account Details</h3>
+                <div class="info-row">
+                    <span class="info-label">Name:</span>
+                    <span class="info-value">{{fullName}}</span>
+                </div>
+                {{#if email}}
+                <div class="info-row">
+                    <span class="info-label">Email:</span>
+                    <span class="info-value">{{email}}</span>
+                </div>
+                {{/if}}
+                {{#if apartmentCode}}
+                <div class="info-row">
+                    <span class="info-label">Building:</span>
+                    <span class="info-value">{{apartmentCode}}</span>
+                </div>
+                {{/if}}
+                {{#if flatNumber}}
+                <div class="info-row">
+                    <span class="info-label">Flat:</span>
+                    <span class="info-value">{{#if wing}}{{wing}}-{{/if}}{{flatNumber}}</span>
+                </div>
+                {{/if}}
+                <div class="info-row">
+                    <span class="info-label">Updated On:</span>
+                    <span class="info-value">{{updatedAt}}</span>
+                </div>
+            </div>
+
+            <center>
+                <a href="{{loginUrl}}" class="button">Go to ApartmentSync</a>
+            </center>
+
+            <p style="color: #64748b; font-size: 14px; margin-top: 25px; text-align: center;">
+                Need help? Contact our support team at <a href="mailto:{{supportEmail}}">{{supportEmail}}</a>
+            </p>
+        </div>
+        <div class="footer">
+            <p><strong>ApartmentSync</strong> - Your Complete Community Management Solution</p>
+            <p>&copy; {{currentYear}} ApartmentSync. All rights reserved.</p>
+            <p style="margin-top: 15px; font-size: 12px;">
+                This is an automated notification. Please do not reply to this email.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+

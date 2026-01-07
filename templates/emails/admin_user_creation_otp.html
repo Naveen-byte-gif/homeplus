@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OTP Verification - Create User Account</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f7fa;
+        }
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 0;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+        .header-icon {
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 40px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 600;
+        }
+        .content {
+            padding: 40px 30px;
+            background: #ffffff;
+        }
+        .greeting {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a202c;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 20px;
+            margin: 25px 0;
+            border-radius: 8px;
+        }
+        .info-box p {
+            margin: 0;
+            color: #92400e;
+        }
+        .otp-section {
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+            border: 2px solid #3b82f6;
+            padding: 25px;
+            margin: 25px 0;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .otp-label {
+            font-size: 14px;
+            color: #1e40af;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+        }
+        .otp-code {
+            font-size: 42px;
+            font-weight: 700;
+            color: #1e40af;
+            letter-spacing: 8px;
+            font-family: 'Courier New', 'Monaco', monospace;
+            margin: 15px 0;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            display: inline-block;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .otp-validity {
+            font-size: 13px;
+            color: #64748b;
+            margin-top: 10px;
+        }
+        .user-details {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+        }
+        .user-details h3 {
+            margin: 0 0 15px;
+            font-size: 16px;
+            color: #1e293b;
+            font-weight: 600;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        .detail-label {
+            font-weight: 600;
+            color: #64748b;
+            font-size: 14px;
+        }
+        .detail-value {
+            color: #1e293b;
+            font-size: 14px;
+        }
+        .warning-box {
+            background: #fee2e2;
+            border-left: 4px solid #ef4444;
+            padding: 15px 20px;
+            margin: 25px 0;
+            border-radius: 8px;
+        }
+        .warning-box p {
+            margin: 5px 0;
+            color: #991b1b;
+            font-size: 14px;
+        }
+        .footer {
+            padding: 30px;
+            text-align: center;
+            background: #f8fafc;
+            border-top: 1px solid #e2e8f0;
+            color: #64748b;
+            font-size: 13px;
+        }
+        @media only screen and (max-width: 600px) {
+            .container {
+                margin: 0;
+                border-radius: 0;
+            }
+            .content {
+                padding: 25px 20px;
+            }
+            .otp-code {
+                font-size: 32px;
+                letter-spacing: 4px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-icon">🔐</div>
+            <h1>Verify User Creation</h1>
+        </div>
+        <div class="content">
+            <div class="greeting">Hello Admin! 👋</div>
+            
+            <div class="info-box">
+                <p><strong>⚠️ Action Required:</strong> You are about to create a new user account. Please verify this action using the OTP below.</p>
+            </div>
+
+            <div class="otp-section">
+                <div class="otp-label">Verification Code</div>
+                <div class="otp-code">{{otp}}</div>
+                <div class="otp-validity">⏰ This OTP is valid for {{validity}} minutes</div>
+            </div>
+
+            <div class="user-details">
+                <h3>📋 New User Details to be Created:</h3>
+                <div class="detail-row">
+                    <span class="detail-label">Full Name:</span>
+                    <span class="detail-value">{{fullName}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Email:</span>
+                    <span class="detail-value">{{email}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Phone:</span>
+                    <span class="detail-value">{{phoneNumber}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Role:</span>
+                    <span class="detail-value">{{role}}</span>
+                </div>
+                {{#if apartmentCode}}
+                <div class="detail-row">
+                    <span class="detail-label">Building Code:</span>
+                    <span class="detail-value">{{apartmentCode}}</span>
+                </div>
+                {{/if}}
+                {{#if flatNumber}}
+                <div class="detail-row">
+                    <span class="detail-label">Flat:</span>
+                    <span class="detail-value">{{#if wing}}{{wing}}-{{/if}}{{flatNumber}}</span>
+                </div>
+                {{/if}}
+            </div>
+
+            <div class="warning-box">
+                <p><strong>🔒 Security Notice:</strong></p>
+                <p>• Do not share this OTP with anyone</p>
+                <p>• Enter this OTP in the application to confirm account creation</p>
+                <p>• If you did not initiate this action, please ignore this email</p>
+            </div>
+
+            <p style="color: #64748b; font-size: 14px; margin-top: 25px;">
+                Need help? Contact support at <a href="mailto:{{supportEmail}}">{{supportEmail}}</a>
+            </p>
+        </div>
+        <div class="footer">
+            <p><strong>ApartmentSync</strong> - Admin Verification</p>
+            <p>&copy; {{currentYear}} ApartmentSync. All rights reserved.</p>
+            <p style="margin-top: 15px; font-size: 12px;">
+                This is an automated email. Please do not reply to this message.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+

@@ -27,6 +27,70 @@ const staffSchema = new mongoose.Schema({
     wing: String,
     floors: [Number]
   }],
+  // Assigned buildings with access control
+  assignedBuildings: [{
+    buildingCode: { type: String, required: true, uppercase: true },
+    buildingName: String,
+    isPrimary: { type: Boolean, default: false },
+    assignedAt: { type: Date, default: Date.now }
+  }],
+  // Identity verification
+  identityVerification: {
+    idProofType: {
+      type: String,
+      enum: ['Aadhar', 'PAN', 'Driving License', 'Passport', 'Voter ID', 'Other']
+    },
+    idProofNumber: String,
+    idProofDocument: {
+      url: String,
+      publicId: String
+    },
+    verificationStatus: {
+      type: String,
+      enum: ['Pending', 'Verified', 'Rejected'],
+      default: 'Pending'
+    },
+    verifiedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    verifiedAt: Date,
+    rejectionReason: String
+  },
+  // Emergency contact information
+  emergencyContact: {
+    name: String,
+    relationship: {
+      type: String,
+      enum: ['Spouse', 'Parent', 'Sibling', 'Child', 'Friend', 'Other']
+    },
+    phoneNumber: String,
+    alternatePhoneNumber: String,
+    address: {
+      street: String,
+      city: String,
+      state: String,
+      pincode: String
+    }
+  },
+  // Permissions and access control
+  permissions: {
+    canManageVisitors: { type: Boolean, default: false },
+    canManageComplaints: { type: Boolean, default: false },
+    canManageMaintenance: { type: Boolean, default: false },
+    canAccessReports: { type: Boolean, default: false },
+    canManageAccess: { type: Boolean, default: false },
+    allowedActions: [{
+      type: String,
+      enum: ['check_in_visitor', 'check_out_visitor', 'create_visitor', 'update_visitor', 
+             'assign_complaint', 'update_complaint', 'close_complaint', 'view_reports']
+    }],
+    restrictedAreas: [{
+      buildingCode: String,
+      floors: [Number],
+      wings: [String]
+    }]
+  },
   availability: {
     schedule: {
       monday: { start: String, end: String, available: Boolean },
@@ -65,7 +129,16 @@ const staffSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
-  }
+  },
+  onboardingCompleted: {
+    type: Boolean,
+    default: false
+  },
+  onboardedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  onboardedAt: Date
 }, {
   timestamps: true
 });

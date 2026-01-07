@@ -4,7 +4,10 @@ const Complaint = require("../models/Complaint");
 const Staff = require("../models/Staff");
 const Notice = require("../models/Notice");
 const Apartment = require("../models/Apartment");
+const OTP = require("../models/OTP");
 const { emitToUser, emitToRoom } = require("../services/socketService");
+const { sendAccountApprovedEmail, sendAccountRejectedEmail, sendStaffWelcomeEmail, sendWelcomeEmail, sendAccountCreatedEmail, sendAdminUserCreationOTP, sendAccountConfirmationEmail, sendAdminNewUserNotification: sendAdminNewUserEmail, sendUserStatusChangeEmail } = require("../services/emailService");
+const { sendUserAccountCreatedNotification, sendUserStatusChangeNotification, sendAdminNewUserNotification: sendAdminNewUserPush } = require("../services/notificationService");
 
 // @desc    Get all buildings for admin
 // @route   GET /api/admin/buildings
@@ -421,9 +424,63 @@ const updateUserApproval = async (req, res) => {
       });
     }
 
+    // Get old status before update
+    const oldStatus = user.status;
+    
     const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
       new: true,
     }).select("-password");
+
+    // Send status change email notification to user
+    if (updatedUser.email) {
+      console.log("📧 [ADMIN] Sending status change email to user...");
+      try {
+        const newStatus = action === "approve" ? "active" : "rejected";
+        const emailResult = await sendUserStatusChangeEmail(updatedUser, oldStatus, newStatus, reason);
+        if (emailResult.success) {
+          console.log(`✅ [ADMIN] Status change email sent successfully to ${updatedUser.email}`);
+        } else {
+          console.warn("⚠️ [ADMIN] Status change email sending failed (non-fatal):", emailResult.message);
+        }
+      } catch (emailError) {
+        console.warn("⚠️ [ADMIN] Status change email sending error (non-fatal):", emailError.message);
+      }
+    }
+
+    // Send real-time notification + FCM push to user
+    console.log("📱 [ADMIN] Sending status change notification to user...");
+    try {
+      const newStatus = action === "approve" ? "active" : "rejected";
+      const userNotificationResult = await sendUserStatusChangeNotification(updatedUser, oldStatus, newStatus, reason);
+      if (userNotificationResult && userNotificationResult.success) {
+        console.log("✅ [ADMIN] User status change notification (Socket + FCM) sent successfully");
+      } else {
+        console.warn("⚠️ [ADMIN] User notification sending failed (non-fatal):", userNotificationResult?.error);
+      }
+    } catch (notifError) {
+      console.warn("⚠️ [ADMIN] User notification error (non-fatal):", notifError.message);
+    }
+
+    // Also send notification to admin (building owner)
+    console.log("📱 [ADMIN] Sending notification to admin about status change...");
+    try {
+      // Notify admin about the action taken via Socket + FCM
+      emitToUser(adminId.toString(), "user_status_updated", {
+        message: `User ${updatedUser.fullName} has been ${action === "approve" ? "approved" : "rejected"}`,
+        user: {
+          id: updatedUser._id,
+          fullName: updatedUser.fullName,
+          status: updatedUser.status,
+          email: updatedUser.email,
+          flatNumber: updatedUser.flatNumber,
+        },
+        oldStatus: oldStatus,
+        newStatus: updatedUser.status,
+        timestamp: new Date(),
+      });
+    } catch (notifyError) {
+      console.warn("⚠️ [ADMIN] Admin notification error (non-fatal):", notifyError.message);
+    }
 
     // Broadcast to admin room
     emitToRoom("admin", "user_approval_updated", {
@@ -774,6 +831,177 @@ const getAllStaff = async (req, res) => {
   }
 };
 
+// @desc    Onboard staff member with permissions and access control
+// @route   POST /api/admin/staff/onboard
+// @access  Private (Admin)
+const onboardStaff = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin access required.'
+      });
+    }
+
+    const {
+      userId,
+      employeeId,
+      specialization = [],
+      assignedBuildings = [],
+      identityVerification = {},
+      emergencyContact = {},
+      availability = {},
+      permissions = {}
+    } = req.body;
+
+    // Validate required fields
+    if (!userId || !employeeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID and Employee ID are required'
+      });
+    }
+
+    // Verify user exists and is a staff member
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (user.role !== 'staff') {
+      return res.status(400).json({
+        success: false,
+        message: 'User must have staff role to be onboarded'
+      });
+    }
+
+    // Check if staff profile already exists
+    const existingStaff = await Staff.findOne({ user: userId });
+    if (existingStaff) {
+      return res.status(409).json({
+        success: false,
+        message: 'Staff profile already exists for this user'
+      });
+    }
+
+    // Check if employee ID is already taken
+    const existingEmployeeId = await Staff.findOne({ employeeId });
+    if (existingEmployeeId) {
+      return res.status(409).json({
+        success: false,
+        message: 'Employee ID already exists'
+      });
+    }
+
+    // Validate assigned buildings belong to admin
+    if (assignedBuildings.length > 0) {
+      const adminBuildings = await Apartment.find({
+        createdBy: adminId,
+        isActive: true
+      }).select('code');
+
+      const adminBuildingCodes = adminBuildings.map(b => b.code.toUpperCase());
+      const requestedBuildingCodes = assignedBuildings.map(b => b.buildingCode?.toUpperCase());
+
+      const invalidBuildings = requestedBuildingCodes.filter(
+        code => !adminBuildingCodes.includes(code)
+      );
+
+      if (invalidBuildings.length > 0) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied to buildings: ${invalidBuildings.join(', ')}`
+        });
+      }
+
+      // Set user's apartmentCode to primary building if not set
+      const primaryBuilding = assignedBuildings.find(b => b.isPrimary) || assignedBuildings[0];
+      if (primaryBuilding && !user.apartmentCode) {
+        user.apartmentCode = primaryBuilding.buildingCode.toUpperCase();
+        await user.save();
+      }
+    }
+
+    // Create staff profile
+    const staffData = {
+      user: userId,
+      employeeId,
+      specialization,
+      assignedBuildings: assignedBuildings.map(b => ({
+        buildingCode: b.buildingCode.toUpperCase(),
+        buildingName: b.buildingName,
+        isPrimary: b.isPrimary || false,
+        assignedAt: new Date()
+      })),
+      identityVerification: {
+        ...identityVerification,
+        verificationStatus: identityVerification.verificationStatus || 'Pending'
+      },
+      emergencyContact,
+      permissions: {
+        canManageVisitors: permissions.canManageVisitors || false,
+        canManageComplaints: permissions.canManageComplaints || false,
+        canManageMaintenance: permissions.canManageMaintenance || false,
+        canAccessReports: permissions.canAccessReports || false,
+        canManageAccess: permissions.canManageAccess || false,
+        allowedActions: permissions.allowedActions || [],
+        restrictedAreas: permissions.restrictedAreas || []
+      },
+      availability: availability.schedule ? {
+        schedule: availability.schedule,
+        currentStatus: availability.currentStatus || 'Available',
+        nextAvailable: availability.nextAvailable || null
+      } : {
+        currentStatus: 'Available'
+      },
+      onboardingCompleted: true,
+      onboardedBy: adminId,
+      onboardedAt: new Date(),
+      isActive: true
+    };
+
+    const staff = await Staff.create(staffData);
+
+    // Populate staff data
+    const populatedStaff = await Staff.findById(staff._id)
+      .populate('user', 'fullName phoneNumber email profilePicture apartmentCode')
+      .populate('onboardedBy', 'fullName');
+
+    // Emit real-time notification
+    emitToUser(userId.toString(), 'staff_onboarded', {
+      message: 'You have been onboarded successfully',
+      staff: populatedStaff
+    });
+
+    // Notify admin
+    emitToUser(adminId.toString(), 'staff_onboarding_completed', {
+      message: `Staff ${user.fullName} has been onboarded successfully`,
+      staffId: staff._id,
+      employeeId: staff.employeeId
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Staff onboarded successfully',
+      data: { staff: populatedStaff }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Staff onboarding error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error onboarding staff',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 // @desc    Create building/apartment (for admin after login)
 // @route   POST /api/admin/buildings
 // @access  Private (Admin)
@@ -984,6 +1212,29 @@ const createBuilding = async (req, res) => {
 
     console.log("📡 [ADMIN] Emitting real-time events for building creation");
 
+    // Get notification service
+    const { sendUserNotification } = require('../services/notificationService');
+
+    // Prepare notification data
+    const notificationData = {
+      title: 'Building Created Successfully',
+      message: `Building "${building.name}" (${building.code}) has been created with ${numFloors} floors and ${numFlatsPerFloor} flats per floor`,
+      buildingId: building._id.toString(),
+      buildingName: building.name,
+      buildingCode: building.code,
+      totalFloors: building.configuration.totalFloors,
+      flatsPerFloor: building.configuration.flatsPerFloor,
+      totalFlats: numFloors * numFlatsPerFloor,
+      timestamp: new Date()
+    };
+
+    // Send real-time notification to admin
+    await sendUserNotification(
+      adminId.toString(),
+      'building_created',
+      notificationData
+    );
+
     // Emit real-time event to admin
     emitToUser(adminId.toString(), "building_created", {
       message: "Building created successfully",
@@ -993,18 +1244,23 @@ const createBuilding = async (req, res) => {
         code: building.code,
         totalFloors: building.configuration.totalFloors,
         flatsPerFloor: building.configuration.flatsPerFloor,
+        totalFlats: numFloors * numFlatsPerFloor,
       },
+      notification: notificationData
     });
     console.log(`📡 [ADMIN] Notified admin ${adminId} about building creation`);
 
-    // Broadcast to apartment room
+    // Broadcast to apartment room (for future residents/staff)
     emitToRoom(`apartment_${building.code}`, "building_created", {
       message: "Building created",
       building: {
         id: building._id,
         name: building.name,
         code: building.code,
+        totalFloors: building.configuration.totalFloors,
+        flatsPerFloor: building.configuration.flatsPerFloor,
       },
+      timestamp: new Date()
     });
     console.log(
       `📡 [ADMIN] Broadcasted building creation to apartment ${building.code}`
@@ -1077,7 +1333,494 @@ const createBuilding = async (req, res) => {
   }
 };
 
-// @desc    Create user (resident or staff) - Admin only
+// @desc    Request OTP for user creation verification - Admin only
+// @route   POST /api/admin/users/request-otp
+// @access  Private (Admin)
+const requestOTPForUserCreation = async (req, res) => {
+  try {
+    console.log("📧 [ADMIN] Request OTP for user creation");
+    console.log("📧 [ADMIN] Request body:", JSON.stringify({ ...req.body, password: "***" }, null, 2));
+
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+
+    if (!admin || admin.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can create users",
+      });
+    }
+
+    if (!admin.email) {
+      return res.status(400).json({
+        success: false,
+        message: "Admin email not found. Please update your profile with an email address.",
+      });
+    }
+
+    const {
+      fullName,
+      phoneNumber,
+      email,
+      role,
+      floorNumber,
+      flatNumber,
+      flatType,
+      buildingCode,
+    } = req.body;
+
+    // Validate required fields
+    if (!fullName || !email || !role) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: fullName, email, and role are required",
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^\S+@\S+\.\S+$/;
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!emailRegex.test(trimmedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid email address",
+      });
+    }
+
+    // Generate OTP for admin verification
+    const otpData = await OTP.generateOTP(admin.email, 'admin_user_creation', 'email');
+    console.log(`✅ [ADMIN] OTP generated: ${otpData.otp}`);
+
+    // Send OTP email to admin
+    const userData = {
+      fullName,
+      email: trimmedEmail,
+      phoneNumber,
+      role,
+      floorNumber,
+      flatNumber,
+      flatType,
+      apartmentCode: buildingCode,
+    };
+
+    const emailResult = await sendAdminUserCreationOTP(admin.email, otpData.otp, userData);
+
+    if (!emailResult.success) {
+      console.warn("⚠️ [ADMIN] Failed to send OTP email:", emailResult.message);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP email. Please try again.",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "OTP sent to your email. Please verify to create the account.",
+      data: {
+        adminEmail: admin.email,
+      },
+    });
+  } catch (error) {
+    console.error("❌ [ADMIN] Request OTP error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error generating OTP",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// @desc    Verify OTP and create user - Admin only
+// @route   POST /api/admin/users/verify-otp-create
+// @access  Private (Admin)
+const verifyOTPAndCreateUser = async (req, res) => {
+  try {
+    console.log("👤 [ADMIN] Verify OTP and create user request");
+    console.log("👤 [ADMIN] Request body:", JSON.stringify({ ...req.body, password: "***", otp: "***" }, null, 2));
+
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+
+    if (!admin || admin.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can create users",
+      });
+    }
+
+    if (!admin.email) {
+      return res.status(400).json({
+        success: false,
+        message: "Admin email not found",
+      });
+    }
+
+    const {
+      fullName,
+      phoneNumber,
+      email,
+      password,
+      role,
+      floorNumber,
+      flatNumber,
+      flatType,
+      buildingCode,
+      otp,
+    } = req.body;
+
+    // Validate OTP
+    if (!otp) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP is required",
+      });
+    }
+
+    // Verify OTP
+    const otpRecord = await OTP.findOne({
+      email: admin.email.toLowerCase(),
+      purpose: 'admin_user_creation',
+      otp: otp.toString(),
+      isUsed: false,
+      expiresAt: { $gt: new Date() },
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired OTP. Please request a new one.",
+      });
+    }
+
+    // Mark OTP as used
+    otpRecord.isUsed = true;
+    await otpRecord.save();
+
+    // If buildingCode is provided, use it; otherwise get first building
+    let apartmentCode = buildingCode;
+    if (!apartmentCode) {
+      const firstBuilding = await Apartment.findOne({
+        createdBy: adminId,
+        isActive: true,
+      })
+        .select("code")
+        .sort({ createdAt: 1 });
+      if (firstBuilding) {
+        apartmentCode = firstBuilding.code;
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: "No building found. Please create a building first.",
+        });
+      }
+    }
+
+    // Verify building belongs to admin
+    const building = await Apartment.findOne({
+      code: apartmentCode,
+      createdBy: adminId,
+      isActive: true,
+    });
+    if (!building) {
+      return res.status(404).json({
+        success: false,
+        message: "Building not found or access denied",
+      });
+    }
+
+    // Validate required fields
+    if (!fullName || !email || !password || !role) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: fullName, email, password, and role are required",
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^\S+@\S+\.\S+$/;
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!emailRegex.test(trimmedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid email address",
+      });
+    }
+
+    // Validate role
+    if (!["resident", "staff"].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid role. Must be resident or staff",
+      });
+    }
+
+    // Validate phone number format if provided
+    if (phoneNumber) {
+      const phoneRegex = /^[6-9]\d{9}$/;
+      if (!phoneRegex.test(phoneNumber)) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide a valid Indian phone number",
+        });
+      }
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email: trimmedEmail });
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: "User already exists with this email address",
+      });
+    }
+
+    // For residents, validate flat assignment
+    if (role === "resident") {
+      if (!floorNumber || !flatNumber || !flatType) {
+        return res.status(400).json({
+          success: false,
+          message: "For residents, floorNumber, flatNumber, and flatType are required",
+        });
+      }
+
+      // Check if flat exists
+      if (!building.flatExists(floorNumber, flatNumber)) {
+        return res.status(400).json({
+          success: false,
+          message: `Flat ${flatNumber} not found on floor ${floorNumber}`,
+        });
+      }
+
+      // Check if flat is already occupied
+      const flatDetails = building.getFlatDetails(floorNumber, flatNumber);
+      if (flatDetails && flatDetails.isOccupied) {
+        return res.status(409).json({
+          success: false,
+          message: `Flat ${flatNumber} on floor ${floorNumber} is already occupied`,
+        });
+      }
+
+      // Check if another resident already has this flat
+      const existingResident = await User.findOne({
+        apartmentCode: apartmentCode,
+        floorNumber: parseInt(floorNumber),
+        flatNumber: flatNumber.toUpperCase(),
+        role: "resident",
+        status: "active",
+      });
+
+      if (existingResident) {
+        return res.status(409).json({
+          success: false,
+          message: "This flat already has an active resident",
+        });
+      }
+    }
+
+    // Create user
+    const userData = {
+      fullName: fullName.trim(),
+      email: trimmedEmail,
+      password: String(password),
+      role,
+      apartmentCode: apartmentCode,
+      status: "active",
+      isVerified: true,
+    };
+    
+    // Add phone number if provided
+    if (phoneNumber) {
+      userData.phoneNumber = phoneNumber.trim();
+    }
+
+    // Add flat details for residents
+    if (role === "resident") {
+      const floorNum = typeof floorNumber === "string" ? parseInt(floorNumber) : floorNumber;
+      const flatDetails = building.getFlatDetails(floorNum, flatNumber.toUpperCase());
+      let flatCode = "";
+
+      if (flatDetails && flatDetails.flatCode) {
+        flatCode = flatDetails.flatCode;
+      } else {
+        const buildingPrefix = building.name
+          .replace(/[^a-zA-Z0-9]/g, "")
+          .substring(0, 6)
+          .toUpperCase();
+        const flatNumStr = flatNumber.replace(/[^0-9]/g, "");
+        flatCode = `${buildingPrefix}-${floorNum}-${flatNumStr.padStart(2, "0")}`;
+      }
+
+      userData.floorNumber = floorNum;
+      userData.flatNumber = flatNumber.toUpperCase();
+      userData.flatCode = flatCode.toUpperCase();
+      userData.flatType = flatType;
+      userData.wing = "A";
+      userData.registeredAt = new Date();
+      userData.lastUpdatedAt = new Date();
+    }
+
+    const user = await User.create(userData);
+
+    // Mark flat as occupied if resident
+    if (role === "resident") {
+      const floorNum = typeof floorNumber === "string" ? parseInt(floorNumber) : floorNumber;
+      building.markFlatOccupied(floorNum, flatNumber.toUpperCase(), user._id);
+      await building.save();
+
+      emitToRoom(`apartment_${apartmentCode}`, "flat_status_updated", {
+        message: "Flat status updated",
+        buildingCode: apartmentCode,
+        flat: {
+          floorNumber: floorNum,
+          flatNumber: flatNumber.toUpperCase(),
+          flatCode: user.flatCode,
+          isOccupied: true,
+          occupiedBy: {
+            userId: user._id,
+            fullName: user.fullName,
+            phoneNumber: user.phoneNumber,
+          },
+        },
+        timestamp: new Date(),
+      });
+    }
+
+    console.log(`✅ [ADMIN] User created: ${user._id}`);
+
+    // Send account confirmation email to the newly created user
+    if (user.email) {
+      console.log("📧 [ADMIN] Sending account confirmation email to user...");
+      try {
+        const emailResult = await sendAccountConfirmationEmail(user);
+        if (emailResult && emailResult.success) {
+          console.log("✅ [ADMIN] Account confirmation email sent successfully to user");
+        } else {
+          console.warn("⚠️ [ADMIN] Account confirmation email sending failed (non-fatal):", emailResult?.message);
+        }
+      } catch (emailError) {
+        console.warn("⚠️ [ADMIN] Account confirmation email sending error (non-fatal):", emailError.message);
+      }
+    }
+
+    // Send real-time notification + FCM push to user
+    console.log("📱 [ADMIN] Sending notification to new user...");
+    try {
+      const userNotificationResult = await sendUserAccountCreatedNotification(user);
+      if (userNotificationResult && userNotificationResult.success) {
+        console.log("✅ [ADMIN] User notification (Socket + FCM) sent successfully");
+      } else {
+        console.warn("⚠️ [ADMIN] User notification sending failed (non-fatal):", userNotificationResult?.error);
+      }
+    } catch (notifError) {
+      console.warn("⚠️ [ADMIN] User notification error (non-fatal):", notifError.message);
+    }
+
+    // Send notification email to admin (building owner) about new user
+    if (admin.email) {
+      console.log("📧 [ADMIN] Sending new user notification to admin...");
+      try {
+        const adminEmailResult = await sendAdminNewUserEmail(admin.email, user, true);
+        if (adminEmailResult && adminEmailResult.success) {
+          console.log("✅ [ADMIN] Admin notification email sent successfully");
+        } else {
+          console.warn("⚠️ [ADMIN] Admin notification email sending failed (non-fatal):", adminEmailResult?.message);
+        }
+      } catch (adminEmailError) {
+        console.warn("⚠️ [ADMIN] Admin notification email sending error (non-fatal):", adminEmailError.message);
+      }
+    }
+
+    // Send real-time notification + FCM push to admin
+    console.log("📱 [ADMIN] Sending notification to admin...");
+    try {
+      const adminNotificationResult = await sendAdminNewUserPush(adminId, user);
+      if (adminNotificationResult && adminNotificationResult.success) {
+        console.log("✅ [ADMIN] Admin notification (Socket + FCM) sent successfully");
+      } else {
+        console.warn("⚠️ [ADMIN] Admin notification sending failed (non-fatal):", adminNotificationResult?.error);
+      }
+    } catch (adminNotifError) {
+      console.warn("⚠️ [ADMIN] Admin notification error (non-fatal):", adminNotifError.message);
+    }
+
+    // Emit real-time events
+    emitToUser(adminId.toString(), "user_created", {
+      message: `${role} account created successfully`,
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        role: user.role,
+        phoneNumber: user.phoneNumber,
+        email: user.email,
+        flatNumber: user.flatNumber,
+        floorNumber: user.floorNumber,
+      },
+      timestamp: new Date(),
+    });
+
+    emitToRoom(`apartment_${apartmentCode}`, "user_created", {
+      message: "New user created",
+      buildingCode: apartmentCode,
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        role: user.role,
+        phoneNumber: user.phoneNumber,
+        email: user.email,
+        flatNumber: user.flatNumber,
+        floorNumber: user.floorNumber,
+      },
+      timestamp: new Date(),
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `${role} account created successfully`,
+      data: {
+        user: {
+          id: user._id,
+          fullName: user.fullName,
+          phoneNumber: user.phoneNumber,
+          email: user.email,
+          role: user.role,
+          apartmentCode: user.apartmentCode,
+          floorNumber: user.floorNumber,
+          flatNumber: user.flatNumber,
+          flatType: user.flatType,
+          status: user.status,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("❌ [ADMIN] Verify OTP and create user error:", error);
+    console.error("❌ [ADMIN] Error stack:", error.stack);
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "User already exists with this phone number or email",
+      });
+    }
+
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors)
+        .map((err) => err.message)
+        .join(", ");
+      return res.status(400).json({
+        success: false,
+        message: messages,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Error creating user",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// @desc    Create user (resident or staff) - Admin only (Legacy - use verify-otp-create instead)
 // @route   POST /api/admin/users
 // @access  Private (Admin)
 const createUser = async (req, res) => {
@@ -1143,11 +1886,21 @@ const createUser = async (req, res) => {
     }
 
     // Validate required fields
-    if (!fullName || !phoneNumber || !password || !role) {
+    if (!fullName || !email || !password || !role) {
       return res.status(400).json({
         success: false,
         message:
-          "Missing required fields: fullName, phoneNumber, password, and role are required",
+          "Missing required fields: fullName, email, password, and role are required",
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^\S+@\S+\.\S+$/;
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!emailRegex.test(trimmedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid email address",
       });
     }
 
@@ -1159,21 +1912,23 @@ const createUser = async (req, res) => {
       });
     }
 
-    // Validate phone number format
-    const phoneRegex = /^[6-9]\d{9}$/;
-    if (!phoneRegex.test(phoneNumber)) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide a valid Indian phone number",
-      });
+    // Validate phone number format if provided
+    if (phoneNumber) {
+      const phoneRegex = /^[6-9]\d{9}$/;
+      if (!phoneRegex.test(phoneNumber)) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide a valid Indian phone number",
+        });
+      }
     }
 
     // Check if user already exists
-    const existingUser = await User.findOne({ phoneNumber });
+    const existingUser = await User.findOne({ email: trimmedEmail });
     if (existingUser) {
       return res.status(409).json({
         success: false,
-        message: "User already exists with this phone number",
+        message: "User already exists with this email address",
       });
     }
 
@@ -1224,14 +1979,18 @@ const createUser = async (req, res) => {
     // Create user
     const userData = {
       fullName: fullName.trim(),
-      phoneNumber: phoneNumber.trim(),
-      email: email ? email.trim().toLowerCase() : undefined,
+      email: trimmedEmail,
       password: String(password),
       role,
       apartmentCode: apartmentCode,
       status: "active", // Admin-created users are auto-active
       isVerified: true,
     };
+    
+    // Add phone number if provided
+    if (phoneNumber) {
+      userData.phoneNumber = phoneNumber.trim();
+    }
 
     // Add flat details for residents
     if (role === "resident") {
@@ -1315,6 +2074,49 @@ const createUser = async (req, res) => {
     }
 
     console.log(`✅ [ADMIN] User created: ${user._id}`);
+
+    // Generate OTP and send account creation success email with OTP
+    if (user.email) {
+      console.log("📧 [ADMIN] Generating OTP and sending account creation email...");
+      try {
+        // Generate OTP for email verification
+        const otpData = await OTP.generateOTP(user.email, 'registration', 'email');
+        console.log(`✅ [ADMIN] OTP generated for email verification: ${otpData.otp}`);
+        
+        // Send account creation success email with OTP
+        const emailResult = await sendAccountCreatedEmail(user, otpData.otp);
+        
+        if (emailResult && emailResult.success) {
+          console.log("✅ [ADMIN] Account creation email with OTP sent successfully");
+        } else {
+          console.warn("⚠️ [ADMIN] Account creation email sending failed (non-fatal):", emailResult?.message);
+          // Still send regular welcome email as fallback
+          try {
+        if (user.role === "staff") {
+              await sendStaffWelcomeEmail(user);
+        } else {
+              await sendWelcomeEmail(user);
+        }
+          } catch (fallbackError) {
+            console.warn("⚠️ [ADMIN] Fallback welcome email also failed:", fallbackError.message);
+          }
+        }
+      } catch (emailError) {
+        console.warn("⚠️ [ADMIN] Account creation email sending error (non-fatal):", emailError.message);
+        // Try to send regular welcome email as fallback
+        try {
+          if (user.role === "staff") {
+            await sendStaffWelcomeEmail(user);
+          } else {
+            await sendWelcomeEmail(user);
+          }
+        } catch (fallbackError) {
+          console.warn("⚠️ [ADMIN] Fallback welcome email also failed:", fallbackError.message);
+        }
+      }
+    } else {
+      console.warn("⚠️ [ADMIN] No email address provided for user, skipping email verification");
+    }
 
     // Emit real-time events
     console.log("📡 [ADMIN] Emitting real-time events for user creation");
@@ -2392,9 +3194,12 @@ module.exports = {
   getAllComplaints,
   assignComplaintToStaff,
   getAllStaff,
+  onboardStaff,
   createApartment: createBuilding, // Keep backward compatibility
   createBuilding,
   createUser,
+  requestOTPForUserCreation,
+  verifyOTPAndCreateUser,
   getAllUsers,
   getBuildingDetails,
   getAvailableFlats,

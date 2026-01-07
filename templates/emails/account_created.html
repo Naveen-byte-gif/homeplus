@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Created Successfully - ApartmentSync</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f7fa;
+        }
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 0;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+        .header-icon {
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 40px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+        .header p {
+            margin: 10px 0 0;
+            font-size: 16px;
+            opacity: 0.95;
+        }
+        .content {
+            padding: 40px 30px;
+            background: #ffffff;
+        }
+        .greeting {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a202c;
+            margin-bottom: 20px;
+        }
+        .success-message {
+            background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+            border-left: 4px solid #22c55e;
+            padding: 20px;
+            margin: 25px 0;
+            border-radius: 8px;
+        }
+        .success-message p {
+            margin: 0;
+            color: #166534;
+            font-weight: 500;
+        }
+        .otp-section {
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+            border: 2px solid #3b82f6;
+            padding: 25px;
+            margin: 25px 0;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .otp-label {
+            font-size: 14px;
+            color: #1e40af;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+        }
+        .otp-code {
+            font-size: 42px;
+            font-weight: 700;
+            color: #1e40af;
+            letter-spacing: 8px;
+            font-family: 'Courier New', 'Monaco', monospace;
+            margin: 15px 0;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            display: inline-block;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .otp-validity {
+            font-size: 13px;
+            color: #64748b;
+            margin-top: 10px;
+        }
+        .info-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+        }
+        .info-box h3 {
+            margin: 0 0 15px;
+            font-size: 16px;
+            color: #1e293b;
+            font-weight: 600;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        .info-label {
+            font-weight: 600;
+            color: #64748b;
+            font-size: 14px;
+        }
+        .info-value {
+            color: #1e293b;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .features-list {
+            margin: 25px 0;
+        }
+        .features-list h3 {
+            font-size: 16px;
+            color: #1e293b;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+        .features-list ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .features-list li {
+            padding: 10px 0;
+            padding-left: 30px;
+            position: relative;
+            color: #475569;
+            font-size: 14px;
+        }
+        .features-list li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #22c55e;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .warning-box {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 15px 20px;
+            margin: 25px 0;
+            border-radius: 8px;
+        }
+        .warning-box p {
+            margin: 0;
+            color: #92400e;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .button {
+            display: inline-block;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            margin: 25px 0;
+            font-weight: 600;
+            font-size: 16px;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);
+            transition: transform 0.2s;
+        }
+        .button:hover {
+            transform: translateY(-2px);
+        }
+        .footer {
+            padding: 30px;
+            text-align: center;
+            background: #f8fafc;
+            border-top: 1px solid #e2e8f0;
+            color: #64748b;
+            font-size: 13px;
+        }
+        .footer p {
+            margin: 5px 0;
+        }
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        @media only screen and (max-width: 600px) {
+            .container {
+                margin: 0;
+                border-radius: 0;
+            }
+            .content {
+                padding: 25px 20px;
+            }
+            .otp-code {
+                font-size: 32px;
+                letter-spacing: 4px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-icon">✓</div>
+            <h1>Account Created Successfully!</h1>
+            <p>Welcome to ApartmentSync</p>
+        </div>
+        <div class="content">
+            <div class="greeting">Hello {{fullName}}! 👋</div>
+            
+            <div class="success-message">
+                <p>🎉 Your ApartmentSync account has been created successfully! Please verify your email address using the OTP below to activate your account.</p>
+            </div>
+
+            <div class="otp-section">
+                <div class="otp-label">Email Verification Code</div>
+                <div class="otp-code">{{otp}}</div>
+                <div class="otp-validity">⏰ This OTP is valid for {{validity}} minutes</div>
+            </div>
+
+            <div class="warning-box">
+                <p><strong>⚠️ Important Security Notice:</strong></p>
+                <p>• Do not share this OTP with anyone</p>
+                <p>• ApartmentSync staff will never ask for your OTP</p>
+                <p>• If you didn't create this account, please contact support immediately</p>
+            </div>
+
+            <div class="info-box">
+                <h3>📋 Your Account Details</h3>
+                <div class="info-row">
+                    <span class="info-label">Full Name:</span>
+                    <span class="info-value">{{fullName}}</span>
+                </div>
+                {{#if email}}
+                <div class="info-row">
+                    <span class="info-label">Email:</span>
+                    <span class="info-value">{{email}}</span>
+                </div>
+                {{/if}}
+                {{#if phoneNumber}}
+                <div class="info-row">
+                    <span class="info-label">Phone:</span>
+                    <span class="info-value">{{phoneNumber}}</span>
+                </div>
+                {{/if}}
+                <div class="info-row">
+                    <span class="info-label">Role:</span>
+                    <span class="info-value">{{role}}</span>
+                </div>
+                {{#if apartmentCode}}
+                <div class="info-row">
+                    <span class="info-label">Apartment Code:</span>
+                    <span class="info-value">{{apartmentCode}}</span>
+                </div>
+                {{/if}}
+                {{#if flatNumber}}
+                <div class="info-row">
+                    <span class="info-label">Flat Number:</span>
+                    <span class="info-value">{{#if wing}}{{wing}}-{{/if}}{{flatNumber}}</span>
+                </div>
+                {{/if}}
+                {{#if flatType}}
+                <div class="info-row">
+                    <span class="info-label">Flat Type:</span>
+                    <span class="info-value">{{flatType}}</span>
+                </div>
+                {{/if}}
+            </div>
+
+            <div class="features-list">
+                <h3>🚀 What You Can Do:</h3>
+                <ul>
+                    <li>Access your personalized dashboard</li>
+                    <li>Raise and track maintenance complaints</li>
+                    <li>View and pay maintenance dues online</li>
+                    <li>Receive important community notices</li>
+                    <li>Connect with neighbors and staff</li>
+                    <li>Manage visitor entries</li>
+                </ul>
+            </div>
+
+            <center>
+                <a href="{{loginUrl}}" class="button">Verify Email & Login</a>
+            </center>
+
+            <p style="color: #64748b; font-size: 14px; margin-top: 25px;">
+                Need help? Contact our support team at <a href="mailto:{{supportEmail}}">{{supportEmail}}</a>
+            </p>
+        </div>
+        <div class="footer">
+            <p><strong>ApartmentSync</strong> - Your Complete Community Management Solution</p>
+            <p>&copy; {{currentYear}} ApartmentSync. All rights reserved.</p>
+            <p style="margin-top: 15px; font-size: 12px;">
+                This is an automated email. Please do not reply to this message.<br>
+                If you have any questions, please contact our support team.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+

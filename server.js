@@ -17,8 +17,18 @@ console.log("Loaded ENV URI:", process.env.MONGODB_URI);
 const connectDB = require("./config/database");
 
 // Initialize Firebase
-const { initializeFirebase } = require("./config/firebase");
+const {
+  initializeFirebase,
+  checkFirebaseStatus,
+} = require("./config/firebase");
+console.log("\n🚀 [SERVER] Starting Firebase initialization...");
 initializeFirebase();
+
+// Check Firebase status after a short delay
+setTimeout(() => {
+  console.log("\n🔍 [SERVER] Checking Firebase connection status...");
+  checkFirebaseStatus();
+}, 1000);
 
 // Import routes
 const authRoutes = require("./routes/auth");
@@ -27,6 +37,9 @@ const complaintRoutes = require("./routes/complaints");
 const adminRoutes = require("./routes/admin");
 const staffRoutes = require("./routes/staff");
 const noticeRoutes = require("./routes/notices");
+const visitorRoutes = require("./routes/visitors");
+const chatRoutes = require("./routes/chats");
+const communicationRoutes = require("./routes/communication");
 
 // Import socket service
 const { initializeSocket } = require("./services/socketService");
@@ -133,6 +146,9 @@ app.use("/api/complaints", complaintRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/notices", noticeRoutes);
+app.use("/api/visitors", visitorRoutes);
+app.use("/api/chats", chatRoutes);
+app.use("/api/communication", communicationRoutes);
 
 // 404 handler
 app.use("*", (req, res) => {
