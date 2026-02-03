@@ -106,11 +106,21 @@ const sendCommunityMessage = async (req, res) => {
 
     const { messageText, messageType = 'text', mediaUrl, chatType = 'community', wing, block, floorNumber } = req.body;
 
-    if (!messageText && !mediaUrl) {
-      return res.status(400).json({
-        success: false,
-        message: 'Message text or media is required'
-      });
+    // Validate based on message type
+    if (messageType === 'text') {
+      if (!messageText || messageText.trim() === '') {
+        return res.status(400).json({
+          success: false,
+          message: 'Message text is required for text messages'
+        });
+      }
+    } else if (messageType === 'image') {
+      if (!mediaUrl) {
+        return res.status(400).json({
+          success: false,
+          message: 'Media URL is required for image messages'
+        });
+      }
     }
 
     // Get or create chat
@@ -138,19 +148,30 @@ const sendCommunityMessage = async (req, res) => {
     const isEmergency = emergencyKeywords.length > 0;
 
     // Create message
-    const message = {
+    // For image messages, use caption if provided, otherwise use empty string
+    // For text messages, messageText is already validated above
+    const finalMessageText = messageType === 'image' 
+      ? (messageText || '') // Allow empty for images (can have caption)
+      : messageText; // Required for text messages (already validated above)
+
+    // Build message object - only include messageText if it has value or for text messages
+    const messageObj = {
       messageId: `MSG_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       senderId: userId,
       senderName: user.fullName,
       senderRole: user.role,
       messageType,
-      messageText: messageText || '',
       mediaUrl: mediaUrl || null,
       mediaPublicId: null,
       reactions: [],
-      isEmergency,
-      emergencyKeywords
+      isEmergency: messageType === 'text' ? isEmergency : false,
+      emergencyKeywords: messageType === 'text' ? emergencyKeywords : []
     };
+
+    // Always include messageText - empty string is fine for images
+    messageObj.messageText = finalMessageText;
+
+    const message = messageObj;
 
     chat.messages.push(message);
     await chat.save();
@@ -530,10 +551,31 @@ const sendP2PMessage = async (req, res) => {
       });
     }
 
-    // Create message
+    // Validate message based on type
+    if (messageType === 'text') {
+      if (!message || message.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Message text is required for text messages'
+        });
+      }
+    } else if (messageType === 'image' || messageType === 'file') {
+      if (!mediaUrl) {
+        return res.status(400).json({
+          success: false,
+          message: 'Media URL is required for image/file messages'
+        });
+      }
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid message type'
+      });
+    }
+
+    // Create message object - handle message text based on type
     const newMessage = {
       senderId: userId,
-      message: message || '',
       mediaUrl: mediaUrl || null,
       messageType,
       seen: false,
@@ -541,9 +583,23 @@ const sendP2PMessage = async (req, res) => {
       sentAt: new Date()
     };
 
+    // Handle message field based on message type
+    if (messageType === 'text') {
+      // For text messages, message is required (already validated above)
+      newMessage.message = message;
+    } else if (messageType === 'image' || messageType === 'file') {
+      // For image/file messages, message is optional (can have caption)
+      // Set to empty string if not provided - schema validator allows this for non-text messages
+      newMessage.message = message && message.trim().length > 0 ? message : '';
+    }
+
     chat.messages.push(newMessage);
     chat.lastMessage = {
-      text: message || 'Sent an image',
+      text: messageType === 'image' 
+        ? (message || 'Sent an image')
+        : (messageType === 'file'
+          ? (message || 'Sent a file')
+          : message), // text message
       sentAt: new Date(),
       sentBy: userId
     };
@@ -570,9 +626,15 @@ const sendP2PMessage = async (req, res) => {
     // Send notification to receiver
     const receiver = await User.findById(otherParticipant.userId);
     if (receiver) {
+      const notificationMessage = messageType === 'image'
+        ? (message || 'Sent an image')
+        : (messageType === 'file'
+          ? (message || 'Sent a file')
+          : message); // text message
+      
       await sendUserNotification(receiver._id, 'p2p_message', {
         title: `${req.user.fullName}`,
-        message: message || 'Sent an image',
+        message: notificationMessage,
         chatId: chat._id.toString()
       });
     }
@@ -832,18 +894,244 @@ const uploadChatImage = async (req, res) => {
       });
     }
 
+    // Check if file was uploaded successfully
+    if (!req.file.path) {
+      return res.status(500).json({
+        success: false,
+        message: 'Image upload failed. Please try again.'
+      });
+    }
+
     res.status(200).json({
       success: true,
       data: {
         url: req.file.path,
-        publicId: req.file.filename
+        publicId: req.file.filename || req.file.public_id || null
       }
     });
   } catch (error) {
     console.error('Upload chat image error:', error);
+    
+    // Handle timeout errors specifically
+    if (error.name === 'TimeoutError' || error.message?.includes('timeout') || error.message?.includes('Timeout')) {
+      return res.status(408).json({
+        success: false,
+        message: 'Image upload timeout. Please try again with a smaller image or check your internet connection.'
+      });
+    }
+
     res.status(500).json({
       success: false,
-      message: 'Error uploading image',
+      message: 'Error uploading image. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// ==================== ADMIN CHAT MANAGEMENT ====================
+
+// @desc    Get chatable users by building code (Admin only)
+// @route   GET /api/admin/chats/chatable-users
+// @access  Private (Admin)
+const getAdminChatableUsers = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+    
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin access required.'
+      });
+    }
+
+    const { buildingCode } = req.query;
+
+    if (!buildingCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Building code is required'
+      });
+    }
+
+    // Verify building belongs to admin
+    const Apartment = require('../models/Apartment');
+    const building = await Apartment.findOne({
+      code: buildingCode,
+      createdBy: adminId,
+      isActive: true
+    });
+
+    if (!building) {
+      return res.status(404).json({
+        success: false,
+        message: 'Building not found or access denied'
+      });
+    }
+
+    // Get all users from the building (residents and staff)
+    const users = await User.find({
+      apartmentCode: buildingCode,
+      role: { $in: ['resident', 'staff'] },
+      status: 'active',
+      _id: { $ne: adminId }
+    })
+      .select('fullName profilePicture role phoneNumber isOnline lastSeen')
+      .sort({ fullName: 1 });
+
+    res.status(200).json({
+      success: true,
+      data: { users }
+    });
+  } catch (error) {
+    console.error('Get admin chatable users error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching chatable users',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get P2P chats by building code (Admin only)
+// @route   GET /api/admin/chats/p2p
+// @access  Private (Admin)
+const getAdminP2PChats = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+    
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin access required.'
+      });
+    }
+
+    const { buildingCode } = req.query;
+
+    if (!buildingCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Building code is required'
+      });
+    }
+
+    // Verify building belongs to admin
+    const Apartment = require('../models/Apartment');
+    const building = await Apartment.findOne({
+      code: buildingCode,
+      createdBy: adminId,
+      isActive: true
+    });
+
+    if (!building) {
+      return res.status(404).json({
+        success: false,
+        message: 'Building not found or access denied'
+      });
+    }
+
+    // Get chats where admin is a participant AND chat is for the building
+    // Since P2P chats store apartmentCode, all chats for the building will have that code
+    const chats = await P2PChat.find({
+      'participants.userId': adminId,
+      apartmentCode: buildingCode,
+      isActive: true
+    })
+      .populate('participants.userId', 'fullName profilePicture role apartmentCode')
+      .populate('lastMessage.sentBy', 'fullName')
+      .sort({ updatedAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      data: { chats }
+    });
+  } catch (error) {
+    console.error('Get admin P2P chats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching chats',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get community chat by building code (Admin only)
+// @route   GET /api/admin/chats/community
+// @access  Private (Admin)
+const getAdminCommunityChat = async (req, res) => {
+  try {
+    const adminId = req.user.id;
+    const admin = await User.findById(adminId);
+    
+    if (!admin || admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin access required.'
+      });
+    }
+
+    const { buildingCode, chatType = 'community', wing, block, floorNumber } = req.query;
+
+    if (!buildingCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Building code is required'
+      });
+    }
+
+    // Verify building belongs to admin
+    const Apartment = require('../models/Apartment');
+    const building = await Apartment.findOne({
+      code: buildingCode,
+      createdBy: adminId,
+      isActive: true
+    });
+
+    if (!building) {
+      return res.status(404).json({
+        success: false,
+        message: 'Building not found or access denied'
+      });
+    }
+
+    let chat = await CommunityChat.findOne({
+      apartmentCode: buildingCode,
+      chatType,
+      ...(wing && { wing }),
+      ...(block && { block }),
+      ...(floorNumber && { floorNumber: parseInt(floorNumber) })
+    });
+
+    if (!chat) {
+      chat = await CommunityChat.create({
+        apartmentCode: buildingCode,
+        chatType,
+        wing: wing || null,
+        block: block || null,
+        floorNumber: floorNumber ? parseInt(floorNumber) : null,
+        messages: []
+      });
+    }
+
+    // Get online users count
+    const onlineCount = chat.onlineUsers.length;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        chat: {
+          ...chat.toObject(),
+          onlineCount
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get admin community chat error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching community chat',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -855,6 +1143,10 @@ module.exports = {
   sendCommunityMessage,
   pinCommunityMessage,
   addReaction,
+  // Admin Chat Management
+  getAdminCommunityChat,
+  getAdminChatableUsers,
+  getAdminP2PChats,
   // P2P Chat
   getChatableUsers,
   getP2PChats,

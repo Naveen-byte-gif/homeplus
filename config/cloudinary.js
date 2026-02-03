@@ -370,11 +370,24 @@ const cloudinaryUtils = {
 
 // Error handling for file uploads
 const handleUploadError = (error, req, res, next) => {
+  // Handle timeout errors
+  if (error.name === 'TimeoutError' || 
+      error.http_code === 499 || 
+      error.message?.includes('timeout') || 
+      error.message?.includes('Timeout') ||
+      error.message?.includes('Request Timeout')) {
+    console.error('Upload timeout error:', error);
+    return res.status(408).json({
+      success: false,
+      message: 'Image upload timeout. Please try again with a smaller image or check your internet connection.'
+    });
+  }
+
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
-        message: 'File too large'
+        message: 'File too large. Maximum size is 5MB.'
       });
     }
     if (error.code === 'LIMIT_FILE_COUNT') {
@@ -391,19 +404,65 @@ const handleUploadError = (error, req, res, next) => {
     }
   }
 
-  if (error.message.includes('Only')) {
+  if (error.message?.includes('Only')) {
     return res.status(400).json({
       success: false,
       message: error.message
     });
   }
 
+  // Handle Cloudinary-specific errors
+  if (error.http_code) {
+    console.error('Cloudinary error:', error);
+    return res.status(error.http_code >= 400 && error.http_code < 600 ? error.http_code : 500).json({
+      success: false,
+      message: error.message || 'Error uploading image. Please try again.'
+    });
+  }
+
   next(error);
+};
+
+// Helper function to upload file from multer file object
+const uploadToCloudinary = async (file, folder = 'uploads') => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: `apartment_sync/${folder}`,
+        resource_type: 'auto'
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve({
+            secure_url: result.secure_url,
+            public_id: result.public_id,
+            url: result.secure_url
+          });
+        }
+      }
+    );
+    uploadStream.end(file.buffer);
+  });
+};
+
+// Helper function to delete from Cloudinary
+const deleteFromCloudinary = async (publicId) => {
+  try {
+    const result = await cloudinary.uploader.destroy(publicId);
+    return result;
+  } catch (error) {
+    console.error('Error deleting from Cloudinary:', error);
+    throw error;
+  }
 };
 
 module.exports = {
   cloudinary,
   uploadConfigs,
   cloudinaryUtils,
-  handleUploadError
+  handleUploadError,
+  uploadToCloudinary,
+  deleteFromCloudinary
 };

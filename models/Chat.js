@@ -4,7 +4,6 @@ const mongoose = require('mongoose');
 const chatMessageSchema = new mongoose.Schema({
   messageId: {
     type: String,
-    unique: true,
     required: true,
     default: () => `MSG_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   },
@@ -30,9 +29,10 @@ const chatMessageSchema = new mongoose.Schema({
   },
   messageText: {
     type: String,
-    required: true,
+    required: false, // Optional - validation handled in controller based on messageType
     trim: true,
-    maxlength: [5000, 'Message cannot exceed 5000 characters']
+    maxlength: [5000, 'Message cannot exceed 5000 characters'],
+    default: '' // Allow empty string for image messages
   },
   mediaUrl: {
     type: String,
@@ -181,9 +181,20 @@ const p2pChatSchema = new mongoose.Schema({
     },
     message: {
       type: String,
-      required: true,
+      required: false,
       trim: true,
-      maxlength: [5000, 'Message cannot exceed 5000 characters']
+      maxlength: [5000, 'Message cannot exceed 5000 characters'],
+      validate: {
+        validator: function(value) {
+          // For text messages, message must be provided and non-empty
+          if (this.messageType === 'text') {
+            return value != null && value !== undefined && value.toString().trim().length > 0;
+          }
+          // Allow empty string, null, or undefined for non-text messages
+          return true;
+        },
+        message: 'Message text is required for text messages'
+      }
     },
     mediaUrl: {
       type: String,

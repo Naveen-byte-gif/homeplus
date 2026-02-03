@@ -969,6 +969,7 @@ exports.setExactTime = async (req, res) => {
 exports.getVisitorStats = async (req, res) => {
   try {
     const { role, _id, apartmentCode, wing, flatNumber } = req.user;
+    const { building } = req.query; // Get building filter from query params
 
     let query = {};
 
@@ -976,8 +977,17 @@ exports.getVisitorStats = async (req, res) => {
     if (role === "resident") {
       query.hostResident = _id;
       query.apartmentCode = apartmentCode;
+      // For residents, use their building if not specified
+      if (wing && !building) {
+        query.building = wing.toUpperCase();
+      }
     } else if (role === "staff") {
       query.apartmentCode = apartmentCode;
+    }
+
+    // Apply building filter if provided (for admin/staff)
+    if (building && building !== 'ALL') {
+      query.building = building.toUpperCase();
     }
 
     // Get today's date range

@@ -78,7 +78,7 @@ const updateProfile = async (req, res) => {
     const updateData = req.body;
 
     // Fields that can be updated by user
-    const allowedUpdates = ['fullName', 'email', 'profilePicture', 'notificationPreferences'];
+    const allowedUpdates = ['fullName', 'email', 'profilePicture', 'emergencyContact', 'notificationPreferences'];
     const updates = {};
 
     allowedUpdates.forEach(field => {
@@ -164,6 +164,16 @@ const changePassword = async (req, res) => {
     // Update password
     user.password = newPassword;
     await user.save();
+
+    // Send password changed email notification
+    const emailService = require('../services/emailService');
+    try {
+      await emailService.sendPasswordChangedEmail(user);
+      console.log(`✅ [PASSWORD CHANGE] Email notification sent to ${user.email}`);
+    } catch (emailError) {
+      console.error('❌ [PASSWORD CHANGE] Error sending email notification:', emailError);
+      // Don't fail the request if email fails
+    }
 
     // Emit password change event
     emitToUser(userId, 'password_changed', {

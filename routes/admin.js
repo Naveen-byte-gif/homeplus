@@ -21,6 +21,7 @@ const {
   getResidentsAdvanced,
   bulkResidentAction
 } = require('../controllers/adminController');
+const { getAdminCommunityChat, getAdminChatableUsers, getAdminP2PChats } = require('../controllers/chatController');
 
 // Import complaint controller for status updates
 const {
@@ -35,11 +36,12 @@ const { requireAdmin, authorize } = require('../middleware/roleCheck');
 // All routes are protected
 router.use(protect);
 
-// Most routes require admin, but building-view allows all roles
-// Apply admin check to all routes except building-view
+// Most routes require admin, but building-view and available-flats allow staff access
+// Apply admin check to all routes except building-view and available-flats
 router.use((req, res, next) => {
-  if (req.path === '/building-view' || req.originalUrl.includes('/building-view')) {
-    return next(); // Skip admin check for building-view
+  if (req.path === '/building-view' || req.originalUrl.includes('/building-view') ||
+      req.path === '/available-flats' || req.originalUrl.includes('/available-flats')) {
+    return next(); // Skip admin check for building-view and available-flats (handled in controller)
   }
   requireAdmin(req, res, next);
 });
@@ -47,6 +49,11 @@ router.use((req, res, next) => {
 
 // Dashboard
 router.get('/dashboard', getAdminDashboard);
+
+// Chat Management
+router.get('/chats/community', getAdminCommunityChat);
+router.get('/chats/chatable-users', getAdminChatableUsers);
+router.get('/chats/p2p', getAdminP2PChats);
 
 // User management
 router.get('/pending-approvals', getPendingApprovals);

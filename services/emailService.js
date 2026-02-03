@@ -83,7 +83,8 @@ const EMAIL_TEMPLATES = {
   VISITOR_STATUS_UPDATE: 'visitor_status_update',
   STAFF_ONBOARDED: 'staff_onboarded',
   BUILDING_CREATED: 'building_created',
-  ADMIN_WELCOME: 'admin_welcome'
+  ADMIN_WELCOME: 'admin_welcome',
+  PASSWORD_CHANGED: 'password_changed'
 };
 
 // Load email template
@@ -154,7 +155,7 @@ const loadEmailTemplate = async (templateName, variables = {}) => {
 };
 
 // Send email
-const sendEmail = async (to, subject, html, attachments = [], text = null) => {
+const sendEmail = async (to, subject, html, attachments = [], text = null, fromEmail = null, fromName = null) => {
   try {
     // Validate inputs
     if (!to || !subject || (!html && !text)) {
@@ -174,9 +175,10 @@ const sendEmail = async (to, subject, html, attachments = [], text = null) => {
 
     const transporter = createTransporter();
     
-    // Validate sender email
-    const senderEmail = process.env.SENDER_EMAIL || process.env.EMAIL_USER;
-    if (!senderEmail) {
+    // Use default sender email for SMTP authentication
+    // Note: Most SMTP services require 'from' to match authenticated email
+    const defaultSenderEmail = process.env.SENDER_EMAIL || process.env.EMAIL_USER;
+    if (!defaultSenderEmail) {
       console.error('❌ [EMAIL] SENDER_EMAIL not configured');
       return {
         success: false,
@@ -184,16 +186,27 @@ const sendEmail = async (to, subject, html, attachments = [], text = null) => {
       };
     }
     
-    const senderName = process.env.SENDER_NAME || 'ApartmentSync';
+    // Use custom sender name if provided, otherwise use default
+    const senderName = fromName || process.env.SENDER_NAME || 'ApartmentSync';
     
+    // For 'from' field: Use default sender (required for SMTP auth)
+    // For Reply-To: Use custom email if provided (building owner's email)
     const mailOptions = {
-      from: `"${senderName}" <${senderEmail}>`,
+      from: `"${senderName}" <${defaultSenderEmail}>`,
       to: Array.isArray(to) ? to.join(', ') : to,
       subject,
       html: html || undefined,
       text: text || undefined,
-      attachments: attachments || []
+      attachments: attachments || [],
+      // Add Reply-To header if custom sender email is provided (for building owner emails)
+      ...(fromEmail && fromEmail !== defaultSenderEmail ? { replyTo: fromEmail } : {})
     };
+    
+    // Log email details
+    if (fromEmail && fromEmail !== defaultSenderEmail) {
+      console.log(`📧 [EMAIL] Using Reply-To: ${fromEmail} (${fromName || 'Building Owner'})`);
+      console.log(`📧 [EMAIL] Actual sender (SMTP): ${defaultSenderEmail}`);
+    }
 
     // Send email
     console.log(`📧 [EMAIL] Attempting to send email to: ${to}`);
@@ -249,7 +262,7 @@ const sendEmail = async (to, subject, html, attachments = [], text = null) => {
 };
 
 // Send OTP email
-const sendOTPEmail = async (email, otp, purpose = 'verification') => {
+const sendOTPEmail = async (email, otp, purpose = 'verification', fromEmail = null, fromName = null) => {
   if (!email) {
     console.log('⚠️ [EMAIL] No email address provided for OTP');
     return { success: false, message: 'No email address provided' };
@@ -260,12 +273,16 @@ const sendOTPEmail = async (email, otp, purpose = 'verification') => {
     'login': 'Login',
     'admin_registration': 'Admin Registration',
     'password_reset': 'Password Reset',
-    'verification': 'Verification'
+    'verification': 'Verification',
+    'resident_creation': 'Account Creation'
   };
 
   console.log(`📧 [EMAIL] Preparing OTP email for ${purposeLabels[purpose] || purpose}`);
   console.log(`📧 [EMAIL] Recipient: ${email}`);
   console.log(`📧 [EMAIL] OTP Code: ${otp.toString()}`);
+  if (fromEmail) {
+    console.log(`📧 [EMAIL] Sending from: ${fromEmail} (${fromName || 'Building Owner'})`);
+  }
 
   const templateVars = {
     otp: otp.toString(),
@@ -275,22 +292,32 @@ const sendOTPEmail = async (email, otp, purpose = 'verification') => {
   };
 
   try {
+    console.log(`📧 [EMAIL] Loading OTP template: ${EMAIL_TEMPLATES.OTP}`);
     const html = await loadEmailTemplate(EMAIL_TEMPLATES.OTP, templateVars);
     console.log(`✅ [EMAIL] OTP email template loaded successfully`);
     
     const subject = `Your ApartmentSync OTP - ${purposeLabels[purpose] || purpose}`;
     console.log(`📧 [EMAIL] Sending OTP email with subject: ${subject}`);
+    console.log(`📧 [EMAIL] Recipient: ${email}`);
+    console.log(`📧 [EMAIL] OTP Code: ${otp.toString()}`);
     
-    const result = await sendEmail(email, subject, html);
+    const result = await sendEmail(email, subject, html, [], null, fromEmail, fromName);
     
     if (result.success) {
       console.log(`✅ [EMAIL] OTP email sent successfully to ${email}`);
+      console.log(`📋 [EMAIL] Message ID: ${result.messageId || 'N/A'}`);
+      console.log(`📋 [EMAIL] Response: ${result.response || 'N/A'}`);
       if (purpose === 'admin_registration') {
         console.log(`✅ [EMAIL] Admin Registration OTP email delivered to Gmail: ${email}`);
+      }
+      if (purpose === 'resident_creation') {
+        console.log(`✅ [EMAIL] Resident creation OTP email sent successfully`);
+        console.log(`📧 [EMAIL] Reply-To will be: ${fromEmail || 'default sender'}`);
       }
     } else {
       console.error(`❌ [EMAIL] OTP email sending failed to ${email}`);
       console.error(`❌ [EMAIL] Error: ${result.message}`);
+      console.error(`❌ [EMAIL] Error details:`, result.error);
     }
     
     return result;
@@ -881,6 +908,35 @@ const sendSecurityAlertEmail = async (user, alertType, metadata = {}) => {
   );
 };
 
+// Send password changed email
+const sendPasswordChangedEmail = async (user) => {
+  if (!user.email) {
+    console.log(`⚠️ [EMAIL] No email address for user ${user._id}`);
+    return { success: false, message: 'No email address' };
+  }
+
+  const templateVars = {
+    fullName: user.fullName,
+    email: user.email,
+    timestamp: new Date().toLocaleString('en-IN', { 
+      timeZone: 'Asia/Kolkata',
+      dateStyle: 'long',
+      timeStyle: 'short'
+    }),
+    supportEmail: process.env.SUPPORT_EMAIL || 'support@apartmentsync.com',
+    frontendUrl: process.env.FRONTEND_URL || 'https://apartmentsync.com',
+    currentYear: new Date().getFullYear()
+  };
+
+  const html = await loadEmailTemplate(EMAIL_TEMPLATES.PASSWORD_CHANGED, templateVars);
+  
+  return await sendEmail(
+    user.email,
+    'Password Changed Successfully - ApartmentSync',
+    html
+  );
+};
+
 // Send bulk email to multiple users
 const sendBulkEmail = async (users, subject, content, attachments = []) => {
   const templateVars = {
@@ -1245,6 +1301,7 @@ module.exports = {
   sendAccountRejectedEmail,
   sendPasswordResetEmail,
   sendSecurityAlertEmail,
+  sendPasswordChangedEmail,
   sendBulkEmail,
   sendVisitorEntryEmail,
   sendVisitorCheckInEmail,

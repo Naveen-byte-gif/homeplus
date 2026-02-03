@@ -40,6 +40,10 @@ const noticeRoutes = require("./routes/notices");
 const visitorRoutes = require("./routes/visitors");
 const chatRoutes = require("./routes/chats");
 const communicationRoutes = require("./routes/communication");
+const uploadRoutes = require("./routes/upload");
+const paymentRoutes = require("./routes/payments");
+const invoiceRoutes = require("./routes/invoices");
+const upiConfigRoutes = require("./routes/upiConfig");
 
 // Import socket service
 const { initializeSocket } = require("./services/socketService");
@@ -143,12 +147,16 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/complaints", complaintRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/invoices", invoiceRoutes);
+app.use("/api/upi-config", upiConfigRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/notices", noticeRoutes);
 app.use("/api/visitors", visitorRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/communication", communicationRoutes);
+app.use("/api/upload", uploadRoutes);
 
 // 404 handler
 app.use("*", (req, res) => {
