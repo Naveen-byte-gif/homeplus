@@ -90,6 +90,16 @@ router.post('/complaint/message', protect, sendComplaintMessage);
 router.post(
   '/upload-image',
   protect,
+  (req, res, next) => {
+    // Set timeout for this route (60 seconds for image uploads)
+    req.setTimeout(60000, () => {
+      res.status(408).json({
+        success: false,
+        message: 'Upload request timeout. Please try again with a smaller image or check your connection.'
+      });
+    });
+    next();
+  },
   uploadConfigs.chatImages.single('image'),
   handleUploadError,
   uploadChatImage

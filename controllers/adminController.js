@@ -6,7 +6,7 @@ const Notice = require("../models/Notice");
 const Apartment = require("../models/Apartment");
 const OTP = require("../models/OTP");
 const { emitToUser, emitToRoom } = require("../services/socketService");
-const { sendAccountApprovedEmail, sendAccountRejectedEmail, sendStaffWelcomeEmail, sendWelcomeEmail, sendAccountCreatedEmail, sendAdminUserCreationOTP, sendAccountConfirmationEmail, sendAdminNewUserNotification: sendAdminNewUserEmail, sendUserStatusChangeEmail } = require("../services/emailService");
+const { sendAccountApprovedEmail, sendAccountRejectedEmail, sendStaffWelcomeEmail, sendWelcomeEmail, sendAccountCreatedEmail, sendAdminUserCreationOTP, sendAccountConfirmationEmail, sendAdminNewUserNotification: sendAdminNewUserEmail, sendUserStatusChangeEmail, sendOTPEmail } = require("../services/emailService");
 const { sendUserAccountCreatedNotification, sendUserStatusChangeNotification, sendAdminNewUserNotification: sendAdminNewUserPush } = require("../services/notificationService");
 
 // @desc    Get all buildings for admin
@@ -1033,6 +1033,9 @@ const createBuilding = async (req, res) => {
       settings,
       totalFloors,
       flatsPerFloor,
+      totalFlats, // New: Total flats across all floors
+      flatsPerFloorList, // New: Array of flats per floor [2, 3, 4, ...]
+      floorLayoutConfig, // Optional: Custom floor layout configuration
       // New comprehensive fields
       buildingCategory,
       buildingType,
@@ -1053,22 +1056,85 @@ const createBuilding = async (req, res) => {
       });
     }
 
-    // Validate floors and flats configuration
-    const numFloors = parseInt(totalFloors) || 5;
-    const numFlatsPerFloor = parseInt(flatsPerFloor) || 4;
-
-    if (numFloors < 1 || numFloors > 100) {
-      return res.status(400).json({
-        success: false,
-        message: "Total floors must be between 1 and 100",
+    // Determine configuration mode
+    let numFloors, flatsPerFloorArray, calculatedTotalFlats;
+    
+    // Mode 1: Custom floor layout configuration (from stepwise screen)
+    if (floorLayoutConfig && Array.isArray(floorLayoutConfig) && floorLayoutConfig.length > 0) {
+      numFloors = floorLayoutConfig.length;
+      flatsPerFloorArray = floorLayoutConfig.map((config, index) => {
+        // Calculate flats per floor from flatTypes configuration
+        if (config.flatTypes && Array.isArray(config.flatTypes)) {
+          return config.flatTypes.reduce((sum, ft) => sum + (ft.count || 0), 0);
+        }
+        // Fallback: use flatsPerFloor if provided
+        return parseInt(flatsPerFloor) || 4;
       });
+      calculatedTotalFlats = flatsPerFloorArray.reduce((sum, count) => sum + count, 0);
+      
+      console.log("📋 [ADMIN] Using custom floor layout configuration");
+      console.log(`  - Total Floors: ${numFloors}`);
+      console.log(`  - Flats per Floor Array: ${JSON.stringify(flatsPerFloorArray)}`);
+      console.log(`  - Total Flats: ${calculatedTotalFlats}`);
+    }
+    // Mode 2: Total flats + flats per floor list
+    else if (totalFlats && flatsPerFloorList && Array.isArray(flatsPerFloorList) && flatsPerFloorList.length > 0) {
+      numFloors = flatsPerFloorList.length;
+      flatsPerFloorArray = flatsPerFloorList.map(count => parseInt(count) || 0);
+      const sumOfFlats = flatsPerFloorArray.reduce((sum, count) => sum + count, 0);
+      const providedTotal = parseInt(totalFlats);
+      
+      if (sumOfFlats !== providedTotal) {
+        return res.status(400).json({
+          success: false,
+          message: `Total flats mismatch: Sum of flats per floor (${sumOfFlats}) does not equal total flats (${providedTotal})`,
+        });
+      }
+      
+      calculatedTotalFlats = providedTotal;
+      
+      console.log("📋 [ADMIN] Using total flats + flats per floor list");
+      console.log(`  - Total Flats: ${calculatedTotalFlats}`);
+      console.log(`  - Total Floors: ${numFloors}`);
+      console.log(`  - Flats per Floor Array: ${JSON.stringify(flatsPerFloorArray)}`);
+    }
+    // Mode 3: Total floors + uniform flats per floor (existing/backward compatible)
+    else {
+      numFloors = parseInt(totalFloors) || 5;
+      const numFlatsPerFloor = parseInt(flatsPerFloor) || 4;
+      
+      if (numFloors < 1 || numFloors > 100) {
+        return res.status(400).json({
+          success: false,
+          message: "Total floors must be between 1 and 100",
+        });
+      }
+
+      if (numFlatsPerFloor < 1 || numFlatsPerFloor > 50) {
+        return res.status(400).json({
+          success: false,
+          message: "Flats per floor must be between 1 and 50",
+        });
+      }
+      
+      // Create uniform array
+      flatsPerFloorArray = Array(numFloors).fill(numFlatsPerFloor);
+      calculatedTotalFlats = numFloors * numFlatsPerFloor;
+      
+      console.log("📋 [ADMIN] Using uniform flats per floor (legacy mode)");
+      console.log(`  - Total Floors: ${numFloors}`);
+      console.log(`  - Flats per Floor: ${numFlatsPerFloor}`);
+      console.log(`  - Total Flats: ${calculatedTotalFlats}`);
     }
 
-    if (numFlatsPerFloor < 1 || numFlatsPerFloor > 50) {
-      return res.status(400).json({
-        success: false,
-        message: "Flats per floor must be between 1 and 50",
-      });
+    // Validate flats per floor array
+    for (let i = 0; i < flatsPerFloorArray.length; i++) {
+      if (flatsPerFloorArray[i] < 1 || flatsPerFloorArray[i] > 50) {
+        return res.status(400).json({
+          success: false,
+          message: `Flats per floor for floor ${i + 1} must be between 1 and 50 (got ${flatsPerFloorArray[i]})`,
+        });
+      }
     }
 
     // Check if building code already exists
@@ -1082,10 +1148,6 @@ const createBuilding = async (req, res) => {
     }
 
     console.log("📋 [ADMIN] Creating building dynamically...");
-    console.log("📋 [ADMIN] Building configuration:");
-    console.log(`  - Total Floors: ${numFloors}`);
-    console.log(`  - Flats per Floor: ${numFlatsPerFloor}`);
-    console.log(`  - Total Flats: ${numFloors * numFlatsPerFloor}`);
 
     // Generate building code prefix from building name
     const buildingPrefix = name
@@ -1095,48 +1157,82 @@ const createBuilding = async (req, res) => {
 
     // Create floors with flats dynamically
     const floors = [];
-    const flatTypes = ["1BHK", "2BHK", "3BHK", "4BHK"];
+    const defaultFlatTypes = ["1BHK", "2BHK", "3BHK", "4BHK"];
 
     for (let floorNum = 1; floorNum <= numFloors; floorNum++) {
       const flats = [];
-      for (let flatNum = 1; flatNum <= numFlatsPerFloor; flatNum++) {
-        // Format: Floor 1 -> 101, 102, 103, 104; Floor 2 -> 201, 202, etc.
-        const flatNumber = `${floorNum}${String(flatNum).padStart(2, "0")}`;
-        const flatType = flatTypes[(flatNum - 1) % 4]; // Rotate flat types
-
-        // Generate FlatCode: BuildingPrefix-FloorNumber-FlatNumber
-        // Example: SUNSHI-1-01, SUNSHI-2-03
-        const flatCode = `${buildingPrefix}-${floorNum}-${String(
-          flatNum
-        ).padStart(2, "0")}`;
-
-        flats.push({
-          flatNumber: flatNumber,
-          flatCode: flatCode,
-          flatType: flatType,
-          isOccupied: false,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-
-        console.log(
-          `  ✓ Floor ${floorNum}, Flat ${flatNumber} (${flatCode}) - ${flatType}`
-        );
+      const flatsCountForThisFloor = flatsPerFloorArray[floorNum - 1];
+      
+      // Check if custom floor layout config exists for this floor
+      let floorConfig = null;
+      if (floorLayoutConfig && Array.isArray(floorLayoutConfig)) {
+        floorConfig = floorLayoutConfig.find(config => config.floorNumber === floorNum);
       }
+
+      // If custom config exists, use it; otherwise use default rotation
+      if (floorConfig && floorConfig.flatTypes && Array.isArray(floorConfig.flatTypes)) {
+        // Custom flat type distribution for this floor
+        let flatIndex = 1;
+        floorConfig.flatTypes.forEach((ftConfig) => {
+          const flatType = ftConfig.type || defaultFlatTypes[(flatIndex - 1) % 4];
+          const count = parseInt(ftConfig.count) || 1;
+          
+          for (let i = 0; i < count; i++) {
+            const flatNumber = `${floorNum}${String(flatIndex).padStart(2, "0")}`;
+            const flatCode = `${buildingPrefix}-${floorNum}-${String(flatIndex).padStart(2, "0")}`;
+            
+            flats.push({
+              flatNumber: flatNumber,
+              flatCode: flatCode,
+              flatType: flatType,
+              isOccupied: false,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            });
+            
+            console.log(
+              `  ✓ Floor ${floorNum}, Flat ${flatNumber} (${flatCode}) - ${flatType}`
+            );
+            flatIndex++;
+          }
+        });
+      } else {
+        // Default: Rotate flat types
+        for (let flatNum = 1; flatNum <= flatsCountForThisFloor; flatNum++) {
+          const flatNumber = `${floorNum}${String(flatNum).padStart(2, "0")}`;
+          const flatType = defaultFlatTypes[(flatNum - 1) % 4]; // Rotate flat types
+
+          // Generate FlatCode: BuildingPrefix-FloorNumber-FlatNumber
+          const flatCode = `${buildingPrefix}-${floorNum}-${String(flatNum).padStart(2, "0")}`;
+
+          flats.push({
+            flatNumber: flatNumber,
+            flatCode: flatCode,
+            flatType: flatType,
+            isOccupied: false,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+
+          console.log(
+            `  ✓ Floor ${floorNum}, Flat ${flatNumber} (${flatCode}) - ${flatType}`
+          );
+        }
+      }
+      
       floors.push({
         floorNumber: floorNum,
         flats: flats,
       });
     }
 
-    console.log(
-      `✅ [ADMIN] Created ${floors.length} floors with ${floors[0].flats.length} flats each`
-    );
-    console.log(
-      `✅ [ADMIN] Total flats created: ${
-        floors.length * floors[0].flats.length
-      }`
-    );
+    // Calculate statistics
+    const totalFlatsCreated = floors.reduce((sum, floor) => sum + floor.flats.length, 0);
+    const avgFlatsPerFloor = totalFlatsCreated / floors.length;
+    
+    console.log(`✅ [ADMIN] Created ${floors.length} floors`);
+    console.log(`✅ [ADMIN] Total flats created: ${totalFlatsCreated}`);
+    console.log(`✅ [ADMIN] Average flats per floor: ${avgFlatsPerFloor.toFixed(2)}`);
 
     // Calculate building age if completion date is provided
     let buildingAge = null;
@@ -1170,7 +1266,9 @@ const createBuilding = async (req, res) => {
       amenities: amenities || [],
       configuration: {
         totalFloors: numFloors,
-        flatsPerFloor: numFlatsPerFloor,
+        flatsPerFloor: flatsPerFloorArray.length > 0 ? Math.max(...flatsPerFloorArray) : 0, // Max for backward compatibility
+        totalFlats: calculatedTotalFlats,
+        flatsPerFloorList: flatsPerFloorArray, // Store the actual array
         floors: floors,
       },
       settings: settings || {
@@ -1218,13 +1316,13 @@ const createBuilding = async (req, res) => {
     // Prepare notification data
     const notificationData = {
       title: 'Building Created Successfully',
-      message: `Building "${building.name}" (${building.code}) has been created with ${numFloors} floors and ${numFlatsPerFloor} flats per floor`,
+      message: `Building "${building.name}" (${building.code}) has been created with ${numFloors} floors and ${calculatedTotalFlats} total flats`,
       buildingId: building._id.toString(),
       buildingName: building.name,
       buildingCode: building.code,
       totalFloors: building.configuration.totalFloors,
       flatsPerFloor: building.configuration.flatsPerFloor,
-      totalFlats: numFloors * numFlatsPerFloor,
+      totalFlats: calculatedTotalFlats,
       timestamp: new Date()
     };
 
@@ -1244,7 +1342,7 @@ const createBuilding = async (req, res) => {
         code: building.code,
         totalFloors: building.configuration.totalFloors,
         flatsPerFloor: building.configuration.flatsPerFloor,
-        totalFlats: numFloors * numFlatsPerFloor,
+        totalFlats: calculatedTotalFlats,
       },
       notification: notificationData
     });
@@ -1270,27 +1368,22 @@ const createBuilding = async (req, res) => {
     console.log(`  - Building Name: ${building.name}`);
     console.log(`  - Building Code: ${building.code}`);
     console.log(`  - Total Floors: ${building.configuration.totalFloors}`);
-    console.log(`  - Flats per Floor: ${building.configuration.flatsPerFloor}`);
-    console.log(
-      `  - Total Flats: ${
-        building.configuration.totalFloors *
-        building.configuration.flatsPerFloor
-      }`
-    );
+    console.log(`  - Flats per Floor: ${building.configuration.flatsPerFloor} (max)`);
+    console.log(`  - Flats per Floor List: [${flatsPerFloorArray.join(', ')}]`);
+    console.log(`  - Total Flats: ${calculatedTotalFlats}`);
     console.log(`  - All Flats Created Dynamically: ✅`);
 
     res.status(201).json({
       success: true,
-      message: `Building created successfully with ${numFloors} floors and ${numFlatsPerFloor} flats per floor`,
+      message: `Building created successfully with ${numFloors} floors and ${calculatedTotalFlats} total flats`,
       data: {
         building: {
           ...building.toObject(),
           summary: {
             totalFloors: building.configuration.totalFloors,
-            flatsPerFloor: building.configuration.flatsPerFloor,
-            totalFlats:
-              building.configuration.totalFloors *
-              building.configuration.flatsPerFloor,
+            flatsPerFloor: building.configuration.flatsPerFloor, // Max for backward compatibility
+            totalFlats: calculatedTotalFlats,
+            flatsPerFloorList: flatsPerFloorArray,
             floors: building.configuration.floors.map((floor) => ({
               floorNumber: floor.floorNumber,
               totalFlats: floor.flats.length,
@@ -1387,37 +1480,82 @@ const requestOTPForUserCreation = async (req, res) => {
       });
     }
 
-    // Generate OTP for admin verification
-    const otpData = await OTP.generateOTP(admin.email, 'admin_user_creation', 'email');
+    // For residents: Send OTP to resident's email (from building owner's email)
+    // For staff: Send OTP to admin's email for verification
+    let otpEmail = admin.email;
+    let otpPurpose = 'admin_user_creation';
+    let emailMessage = "OTP sent to your email. Please verify to create the account.";
+    
+    if (role === 'resident') {
+      // Send OTP to resident's email from building owner's email
+      otpEmail = trimmedEmail;
+      otpPurpose = 'resident_creation';
+      emailMessage = "OTP sent to resident's email. Please verify to create the account.";
+      console.log(`📧 [ADMIN] Sending OTP to resident's email: ${trimmedEmail}`);
+      console.log(`📧 [ADMIN] OTP will be sent from building owner's email: ${admin.email}`);
+    } else {
+      console.log(`📧 [ADMIN] Sending OTP to admin's email: ${admin.email}`);
+    }
+
+    // Generate OTP
+    const otpData = await OTP.generateOTP(otpEmail, otpPurpose, 'email');
     console.log(`✅ [ADMIN] OTP generated: ${otpData.otp}`);
 
-    // Send OTP email to admin
-    const userData = {
-      fullName,
-      email: trimmedEmail,
-      phoneNumber,
-      role,
-      floorNumber,
-      flatNumber,
-      flatType,
-      apartmentCode: buildingCode,
-    };
-
-    const emailResult = await sendAdminUserCreationOTP(admin.email, otpData.otp, userData);
+    // Send OTP email
+    let emailResult;
+    if (role === 'resident') {
+      // Send OTP to resident's email from building owner's email
+      console.log(`📧 [ADMIN] Preparing to send OTP to resident: ${trimmedEmail}`);
+      console.log(`📧 [ADMIN] OTP Code: ${otpData.otp}`);
+      console.log(`📧 [ADMIN] Building owner email: ${admin.email}`);
+      console.log(`📧 [ADMIN] Building owner name: ${admin.fullName || 'Building Owner'}`);
+      
+      emailResult = await sendOTPEmail(
+        trimmedEmail,
+        otpData.otp,
+        'resident_creation',
+        admin.email, // Building owner's email for Reply-To
+        admin.fullName || 'Building Owner' // Building owner's name as sender name
+      );
+      
+      console.log(`📧 [ADMIN] Email send result:`, {
+        success: emailResult.success,
+        message: emailResult.message,
+        error: emailResult.error
+      });
+    } else {
+      // Send OTP to admin for staff creation
+      const userData = {
+        fullName,
+        email: trimmedEmail,
+        phoneNumber,
+        role,
+        floorNumber,
+        flatNumber,
+        flatType,
+        apartmentCode: buildingCode,
+      };
+      emailResult = await sendAdminUserCreationOTP(admin.email, otpData.otp, userData);
+    }
 
     if (!emailResult.success) {
-      console.warn("⚠️ [ADMIN] Failed to send OTP email:", emailResult.message);
+      console.error("❌ [ADMIN] Failed to send OTP email:", emailResult.message);
+      console.error("❌ [ADMIN] Email error details:", emailResult.error);
       return res.status(500).json({
         success: false,
-        message: "Failed to send OTP email. Please try again.",
+        message: emailResult.message || "Failed to send OTP email. Please check email configuration and try again.",
+        error: process.env.NODE_ENV === 'development' ? emailResult.error : undefined
       });
     }
+    
+    console.log(`✅ [ADMIN] OTP email sent successfully to ${role === 'resident' ? trimmedEmail : admin.email}`);
 
     res.status(200).json({
       success: true,
-      message: "OTP sent to your email. Please verify to create the account.",
+      message: emailMessage,
       data: {
         adminEmail: admin.email,
+        residentEmail: role === 'resident' ? trimmedEmail : null, // Include resident email in response
       },
     });
   } catch (error) {
@@ -1476,10 +1614,21 @@ const verifyOTPAndCreateUser = async (req, res) => {
       });
     }
 
+    // Determine which email to check OTP for
+    // For residents: OTP was sent to resident's email
+    // For staff: OTP was sent to admin's email
+    const trimmedEmail = email.trim().toLowerCase();
+    const otpEmail = role === 'resident' ? trimmedEmail : admin.email.toLowerCase();
+    const otpPurpose = role === 'resident' ? 'resident_creation' : 'admin_user_creation';
+    
+    console.log(`🔍 [ADMIN] Verifying OTP for ${role}`);
+    console.log(`🔍 [ADMIN] OTP email: ${otpEmail}`);
+    console.log(`🔍 [ADMIN] OTP purpose: ${otpPurpose}`);
+
     // Verify OTP
     const otpRecord = await OTP.findOne({
-      email: admin.email.toLowerCase(),
-      purpose: 'admin_user_creation',
+      email: otpEmail,
+      purpose: otpPurpose,
       otp: otp.toString(),
       isUsed: false,
       expiresAt: { $gt: new Date() },
@@ -1536,9 +1685,8 @@ const verifyOTPAndCreateUser = async (req, res) => {
       });
     }
 
-    // Validate email format
+    // Validate email format (trimmedEmail already declared above for OTP verification)
     const emailRegex = /^\S+@\S+\.\S+$/;
-    const trimmedEmail = email.trim().toLowerCase();
     if (!emailRegex.test(trimmedEmail)) {
       return res.status(400).json({
         success: false,
@@ -1686,6 +1834,66 @@ const verifyOTPAndCreateUser = async (req, res) => {
     }
 
     console.log(`✅ [ADMIN] User created: ${user._id}`);
+
+    // For residents: Generate and send OTP to resident's email from building owner's email
+    if (role === "resident" && user.email && admin.email) {
+      console.log("📧 [ADMIN] Generating OTP for resident account creation...");
+      try {
+        // Generate 6-digit OTP
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        // Save OTP to database
+        const otpRecord = await OTP.create({
+          email: user.email.toLowerCase(),
+          otp: otpCode,
+          purpose: 'resident_creation',
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+          isUsed: false
+        });
+        
+        console.log(`✅ [ADMIN] OTP generated and saved: ${otpCode}`);
+        console.log(`📧 [ADMIN] Sending OTP email to resident from building owner's email...`);
+        console.log(`📧 [ADMIN] Resident email: ${user.email}`);
+        console.log(`📧 [ADMIN] Sender email (building owner): ${admin.email}`);
+        console.log(`📧 [ADMIN] Sender name: ${admin.fullName || 'Building Owner'}`);
+        
+        // Send OTP email to resident using building owner's email as sender
+        console.log(`📧 [ADMIN] Calling sendOTPEmail with:`);
+        console.log(`   - Email: ${user.email}`);
+        console.log(`   - OTP: ${otpCode}`);
+        console.log(`   - Purpose: resident_creation`);
+        console.log(`   - From Email: ${admin.email}`);
+        console.log(`   - From Name: ${admin.fullName || 'Building Owner'}`);
+        
+        const otpEmailResult = await sendOTPEmail(
+          user.email,
+          otpCode,
+          'resident_creation',
+          admin.email, // Building owner's email for Reply-To
+          admin.fullName || 'Building Owner' // Building owner's name as sender name
+        );
+        
+        console.log(`📧 [ADMIN] OTP email send result:`, {
+          success: otpEmailResult?.success,
+          message: otpEmailResult?.message,
+          error: otpEmailResult?.error,
+          messageId: otpEmailResult?.messageId
+        });
+        
+        if (otpEmailResult && otpEmailResult.success) {
+          console.log("✅ [ADMIN] OTP email sent successfully to resident after account creation");
+          console.log(`✅ [ADMIN] OTP ${otpCode} sent to ${user.email}`);
+        } else {
+          console.error("❌ [ADMIN] OTP email sending failed:", otpEmailResult?.message);
+          console.error("❌ [ADMIN] Error details:", otpEmailResult?.error);
+          // Don't fail account creation if email fails, but log the error
+        }
+      } catch (otpError) {
+        console.error("❌ [ADMIN] OTP generation/sending error:", otpError.message);
+        console.error("❌ [ADMIN] Error stack:", otpError.stack);
+        // Don't fail account creation if OTP email fails
+      }
+    }
 
     // Send account confirmation email to the newly created user
     if (user.email) {
@@ -2716,52 +2924,98 @@ const getBuildingDetails = async (req, res) => {
   }
 };
 
-// @desc    Get available flats for user creation - Admin only
+// @desc    Get available flats for user creation - Admin and Staff (with building access)
 // @route   GET /api/admin/available-flats
-// @access  Private (Admin)
+// @access  Private (Admin/Staff)
 const getAvailableFlats = async (req, res) => {
   try {
-    const adminId = req.user.id;
+    const userId = req.user.id;
     const { buildingCode } = req.query;
-    const admin = await User.findById(adminId);
+    const user = await User.findById(userId);
 
-    if (!admin || admin.role !== "admin") {
+    if (!user || !['admin', 'staff'].includes(user.role)) {
       return res.status(403).json({
         success: false,
-        message: "Unauthorized",
+        message: "Unauthorized. Admin or staff access required.",
       });
     }
 
-    // If buildingCode is provided, use it; otherwise get first building
+    // If buildingCode is provided, use it
     let apartmentCode = buildingCode;
     if (!apartmentCode) {
-      const firstBuilding = await Apartment.findOne({
-        createdBy: adminId,
-        isActive: true,
-      })
-        .select("code")
-        .sort({ createdAt: 1 });
-      if (firstBuilding) {
-        apartmentCode = firstBuilding.code;
+      if (user.role === 'admin') {
+        // For admin, get first building
+        const firstBuilding = await Apartment.findOne({
+          createdBy: userId,
+          isActive: true,
+        })
+          .select("code")
+          .sort({ createdAt: 1 });
+        if (firstBuilding) {
+          apartmentCode = firstBuilding.code;
+        } else {
+          return res.status(404).json({
+            success: false,
+            message: "No building found. Please create a building first.",
+          });
+        }
       } else {
-        return res.status(404).json({
+        // For staff, buildingCode is required
+        return res.status(400).json({
           success: false,
-          message: "No building found. Please create a building first.",
+          message: "Building code is required",
         });
       }
     }
 
-    // Verify building belongs to admin
-    const building = await Apartment.findOne({
-      code: apartmentCode,
-      createdBy: adminId,
-      isActive: true,
-    });
-    if (!building) {
-      return res.status(404).json({
-        success: false,
-        message: "Building not found or access denied",
+    // Verify building access based on role
+    let building;
+    if (user.role === 'admin') {
+      // Admin: verify building belongs to admin
+      building = await Apartment.findOne({
+        code: apartmentCode,
+        createdBy: userId,
+        isActive: true,
       });
+      if (!building) {
+        return res.status(404).json({
+          success: false,
+          message: "Building not found or access denied",
+        });
+      }
+    } else {
+      // Staff: verify building is in assigned buildings
+      const staff = await Staff.findOne({ user: userId });
+      if (!staff) {
+        return res.status(404).json({
+          success: false,
+          message: "Staff profile not found",
+        });
+      }
+      
+      const hasAccess = staff.assignedBuildings.some(
+        (ab) => ab.buildingCode.toUpperCase() === apartmentCode.toUpperCase()
+      );
+      
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied to this building",
+        });
+      }
+      
+      // Get building
+      building = await Apartment.findOne({
+        code: apartmentCode.toUpperCase(),
+        isActive: true,
+      });
+      
+      if (!building) {
+        return res.status(404).json({
+          success: false,
+          message: "Building not found",
+        });
+      }
     }
 
     // Get occupied flats

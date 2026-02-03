@@ -173,12 +173,41 @@ const getComplaint = async (req, res) => {
         createdBy: userId,
       });
     } else if (userRole === "staff") {
-      // Staff can see assigned complaints
+      // Staff can see complaints in their assigned buildings
       const staff = await Staff.findOne({ user: userId });
-      complaint = await Complaint.findOne({
-        _id: complaintId,
-        $or: [{ createdBy: userId }, { "assignedTo.staff": staff?._id }],
-      });
+      if (!staff) {
+        return res.status(404).json({
+          success: false,
+          message: "Staff profile not found",
+        });
+      }
+
+      // Get staff's assigned building codes
+      const buildingCodes = staff.assignedBuildings?.map(b => b.buildingCode) || [];
+      
+      if (buildingCodes.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Complaint not found",
+        });
+      }
+
+      // First, try to find the complaint
+      complaint = await Complaint.findById(complaintId);
+      
+      if (complaint) {
+        // Check if complaint creator belongs to staff's assigned buildings
+        const creator = await User.findById(complaint.createdBy);
+        if (creator && creator.apartmentCode && buildingCodes.includes(creator.apartmentCode)) {
+          // Complaint is from staff's assigned building - allow access
+        } else if (complaint.createdBy?.toString() === userId || 
+                   complaint.assignedTo?.staff?.toString() === staff._id.toString()) {
+          // Staff created it or it's assigned to them - allow access
+        } else {
+          // Complaint is not from assigned buildings and not assigned to staff
+          complaint = null;
+        }
+      }
     } else if (userRole === "admin") {
       // Admins can see all complaints
       complaint = await Complaint.findById(complaintId);

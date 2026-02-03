@@ -137,7 +137,9 @@ const apartmentSchema = new mongoose.Schema({
   },
   configuration: {
     totalFloors: { type: Number, default: 5 },
-    flatsPerFloor: { type: Number, default: 4 },
+    flatsPerFloor: { type: Number, default: 4 }, // Max flats per floor (for backward compatibility)
+    totalFlats: { type: Number }, // Total flats across all floors
+    flatsPerFloorList: [{ type: Number }], // Array of flats per floor [2, 3, 4, ...]
     floors: [{
       floorNumber: { type: Number, required: true },
       flats: [{

@@ -60,7 +60,15 @@ const auditLogSchema = new mongoose.Schema({
       'PASSWORD_RESET_REQUESTED',
       'PASSWORD_RESET_COMPLETED',
       'SECURITY_ALERT',
-      'UNAUTHORIZED_ACCESS'
+      'UNAUTHORIZED_ACCESS',
+      
+      // Payment actions
+      'PAYMENT_ATTEMPT',
+      'PAYMENT_CONFIRMED',
+      'PAYMENT_VERIFIED',
+      'PAYMENT_APPROVED',
+      'PAYMENT_REJECTED',
+      'PAYMENT_FAILED'
     ]
   },
   

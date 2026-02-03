@@ -219,6 +219,44 @@ const isValidJSON = (str) => {
   }
 };
 
+// Validate UPI ID format (supports ALL bank handles)
+const isValidUPIId = (upiId) => {
+  if (!upiId || typeof upiId !== 'string') return false;
+  
+  // NPCI-compliant UPI ID format: user@handle
+  // Supports ALL valid Indian bank UPI handles (e.g., @upi, @ybl, @icici, @sbi, @paytm, @okaxis, etc.)
+  const upiRegex = /^[\w.-]+@[\w.-]+$/;
+  
+  // Additional validation: ensure @ symbol exists and both parts are present
+  const parts = upiId.toLowerCase().split('@');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return false;
+  
+  // Check username part (before @) - alphanumeric, dots, hyphens allowed
+  const usernameRegex = /^[a-z0-9.-]+$/;
+  if (!usernameRegex.test(parts[0])) return false;
+  
+  // Check handle part (after @) - alphanumeric, dots, hyphens allowed
+  const handleRegex = /^[a-z0-9.-]+$/;
+  if (!handleRegex.test(parts[1])) return false;
+  
+  // Overall format validation
+  return upiRegex.test(upiId.toLowerCase());
+};
+
+// Validate minimum payment amount (₹10)
+const isValidPaymentAmount = (amount) => {
+  const minAmount = 10;
+  const amountNum = parseFloat(amount);
+  return !isNaN(amountNum) && amountNum >= minAmount;
+};
+
+// Validate transaction note length (short format for UPI)
+const isValidTransactionNote = (note, maxLength = 30) => {
+  if (!note || typeof note !== 'string') return false;
+  // UPI transaction notes should be short (25-30 chars recommended)
+  return note.trim().length > 0 && note.trim().length <= maxLength;
+};
+
 module.exports = {
   isValidIndianPhone,
   isValidEmail,
@@ -253,5 +291,8 @@ module.exports = {
   isValidNumericRange,
   isValidURL,
   isValidBase64,
-  isValidJSON
+  isValidJSON,
+  isValidUPIId,
+  isValidPaymentAmount,
+  isValidTransactionNote
 };

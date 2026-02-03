@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { protect } = require('../middleware/auth');
 
 console.log('🔌 Auth routes loading...'); // Debug log
 
@@ -36,7 +37,7 @@ router.post('/password-login', (req, res, next) => {
   next();
 }, passwordLogin);
 
-router.get('/me', (req, res, next) => {
+router.get('/me', protect, (req, res, next) => {
   console.log('👤 Get Me route hit');
   next();
 }, getMe);

@@ -4,7 +4,13 @@ const {
   getStaffDashboard,
   getAssignedComplaints,
   updateAvailability,
-  updateSpecialization
+  updateSpecialization,
+  getStaffBuildings,
+  getBuildingDetails,
+  getStaffUsers,
+  createUser,
+  getStaffComplaints,
+  getStaffVisitors
 } = require('../controllers/staffController');
 const { protect } = require('../middleware/auth');
 const { authorize } = require('../middleware/roleCheck');
@@ -15,7 +21,21 @@ router.use(authorize('staff'));
 
 // Dashboard
 router.get('/dashboard', getStaffDashboard);
+
+// Building management
+router.get('/buildings', getStaffBuildings);
+router.get('/building-details', getBuildingDetails);
+
+// User management (permission-based)
+router.get('/users', getStaffUsers);
+router.post('/users', createUser);
+
+// Complaint management (permission-based)
+router.get('/complaints', getStaffComplaints);
 router.get('/assigned-complaints', getAssignedComplaints);
+
+// Visitor management (permission-based)
+router.get('/visitors', getStaffVisitors);
 
 // Profile management
 router.put('/availability', updateAvailability);

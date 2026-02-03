@@ -29,17 +29,16 @@ const sendUserNotification = async (userId, type, data) => {
       read: false,
     };
 
-    // Always emit real-time notification via Socket.IO (for instant UI updates)
     try {
       emitToUser(userId.toString(), "notification", notification);
-      emitToUser(userId.toString(), type, notification.data); // Also emit type-specific event
+      emitToUser(userId.toString(), type, notification.data);
       console.log(
-        `✅ [NOTIFICATION] Socket.IO event emitted: ${type} to user ${userId}`
+        `✅ [NOTIFICATION] Socket.IO event emitted: ${type} to user ${userId}`,
       );
     } catch (socketError) {
       console.error(
         `❌ [NOTIFICATION] Socket.IO error for user ${userId}:`,
-        socketError
+        socketError,
       );
       // Continue even if socket fails
     }
@@ -58,30 +57,30 @@ const sendUserNotification = async (userId, type, data) => {
             type: type,
             ...data,
             userId: userId.toString(),
-          }
+          },
         );
 
         if (!pushResult.success && pushResult.shouldRemove) {
           // Remove invalid FCM token
           await User.findByIdAndUpdate(userId, { $unset: { fcmToken: 1 } });
           console.log(
-            `⚠️ [NOTIFICATION] Removed invalid FCM token for user ${userId}`
+            `⚠️ [NOTIFICATION] Removed invalid FCM token for user ${userId}`,
           );
         }
 
         console.log(
-          `✅ [NOTIFICATION] Push notification sent: ${type} to user ${userId}`
+          `✅ [NOTIFICATION] Push notification sent: ${type} to user ${userId}`,
         );
       } catch (pushError) {
         console.error(
           `❌ [NOTIFICATION] Push notification error for user ${userId}:`,
-          pushError
+          pushError,
         );
         // Continue even if push fails
       }
     } else if (!pushEnabled) {
       console.log(
-        `ℹ️ [NOTIFICATION] Push notifications disabled for user ${userId}`
+        `ℹ️ [NOTIFICATION] Push notifications disabled for user ${userId}`,
       );
     } else if (!user.fcmToken) {
       console.log(`ℹ️ [NOTIFICATION] No FCM token for user ${userId}`);
@@ -94,7 +93,7 @@ const sendUserNotification = async (userId, type, data) => {
   } catch (error) {
     console.error(
       `❌ [NOTIFICATION] Send user notification error for user ${userId}:`,
-      error
+      error,
     );
     return { success: false, error: error.message };
   }
@@ -129,7 +128,7 @@ const sendApartmentNotification = async (apartmentCode, type, data) => {
           {
             type: type,
             ...data,
-          }
+          },
         );
       }
     }
@@ -156,19 +155,19 @@ const sendComplaintStatusUpdate = async (complaint, oldStatus, newStatus) => {
     await sendUserNotification(
       complaint.createdBy.toString(),
       "complaint_status_updated",
-      notificationData
+      notificationData,
     );
 
     // Notify assigned staff if any
     if (complaint.assignedTo && complaint.assignedTo.staff) {
       const staff = await Staff.findById(complaint.assignedTo.staff).populate(
-        "user"
+        "user",
       );
       if (staff) {
         await sendUserNotification(
           staff.user._id.toString(),
           "complaint_status_updated",
-          notificationData
+          notificationData,
         );
       }
     }
@@ -179,7 +178,7 @@ const sendComplaintStatusUpdate = async (complaint, oldStatus, newStatus) => {
       await sendUserNotification(
         admin._id.toString(),
         "complaint_status_updated",
-        notificationData
+        notificationData,
       );
     }
   } catch (error) {
@@ -206,7 +205,7 @@ const sendNewNoticeNotification = async (notice, apartmentCode) => {
 const sendVisitorNotification = async (
   hostResidentId,
   notificationType,
-  visitorData
+  visitorData,
 ) => {
   try {
     const notificationData = {
@@ -223,7 +222,7 @@ const sendVisitorNotification = async (
     return await sendUserNotification(
       hostResidentId.toString(),
       `visitor_${notificationType}`,
-      notificationData
+      notificationData,
     );
   } catch (error) {
     console.error("Send visitor notification error:", error);
@@ -250,7 +249,7 @@ const sendUserAccountCreatedNotification = async (user) => {
     return await sendUserNotification(
       user._id.toString(),
       "account_created",
-      notificationData
+      notificationData,
     );
   } catch (error) {
     console.error("Send user account created notification error:", error);
@@ -259,39 +258,49 @@ const sendUserAccountCreatedNotification = async (user) => {
 };
 
 // Send notification to user when account status changes
-const sendUserStatusChangeNotification = async (user, oldStatus, newStatus, reason = null) => {
+const sendUserStatusChangeNotification = async (
+  user,
+  oldStatus,
+  newStatus,
+  reason = null,
+) => {
   try {
     const statusMessages = {
-      'active': {
+      active: {
         title: "✅ Account Activated",
-        message: `Your ApartmentSync account has been activated! You can now access all features.`
+        message: `Your ApartmentSync account has been activated! You can now access all features.`,
       },
-      'approved': {
+      approved: {
         title: "✅ Account Approved",
-        message: `Your ApartmentSync account has been approved by the administration. Welcome!`
+        message: `Your ApartmentSync account has been approved by the administration. Welcome!`,
       },
-      'rejected': {
+      rejected: {
         title: "❌ Account Rejected",
-        message: `Your account registration has been rejected. ${reason ? `Reason: ${reason}` : 'Please contact admin for details.'}`
+        message: `Your account registration has been rejected. ${
+          reason ? `Reason: ${reason}` : "Please contact admin for details."
+        }`,
       },
-      'suspended': {
+      suspended: {
         title: "⚠️ Account Suspended",
-        message: `Your account has been suspended. ${reason ? `Reason: ${reason}` : 'Please contact admin for assistance.'}`
+        message: `Your account has been suspended. ${
+          reason ? `Reason: ${reason}` : "Please contact admin for assistance."
+        }`,
       },
-      'pending': {
+      pending: {
         title: "⏳ Account Pending",
-        message: `Your account is pending approval from the administration.`
-      }
+        message: `Your account is pending approval from the administration.`,
+      },
     };
 
-    const statusInfo = statusMessages[newStatus.toLowerCase()] || statusMessages['pending'];
+    const statusInfo =
+      statusMessages[newStatus.toLowerCase()] || statusMessages["pending"];
 
     const notificationData = {
       title: statusInfo.title,
       message: statusInfo.message,
       userId: user._id.toString(),
       fullName: user.fullName,
-      oldStatus: oldStatus || 'unknown',
+      oldStatus: oldStatus || "unknown",
       newStatus: newStatus,
       reason: reason,
       timestamp: new Date(),
@@ -300,7 +309,7 @@ const sendUserStatusChangeNotification = async (user, oldStatus, newStatus, reas
     return await sendUserNotification(
       user._id.toString(),
       "account_status_changed",
-      notificationData
+      notificationData,
     );
   } catch (error) {
     console.error("Send user status change notification error:", error);
@@ -313,7 +322,9 @@ const sendAdminNewUserNotification = async (adminId, user) => {
   try {
     const notificationData = {
       title: "👤 New User Account Created",
-      message: `A new ${user.role === 'resident' ? 'resident' : 'staff'} account has been created: ${user.fullName}`,
+      message: `A new ${
+        user.role === "resident" ? "resident" : "staff"
+      } account has been created: ${user.fullName}`,
       userId: user._id.toString(),
       userFullName: user.fullName,
       userEmail: user.email,
@@ -327,7 +338,7 @@ const sendAdminNewUserNotification = async (adminId, user) => {
     return await sendUserNotification(
       adminId.toString(),
       "new_user_created",
-      notificationData
+      notificationData,
     );
   } catch (error) {
     console.error("Send admin new user notification error:", error);

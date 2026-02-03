@@ -10,7 +10,7 @@ const OTPSchema = new mongoose.Schema({
     type: String,
     required: function() {
       // Email required for all purposes that use email-based OTP
-      return ['registration', 'forgot-password', 'login', 'admin_registration', 'admin_user_creation'].includes(this.purpose);
+      return ['registration', 'forgot-password', 'login', 'admin_registration', 'admin_user_creation', 'resident_creation'].includes(this.purpose);
     },
     lowercase: true,
     trim: true,
@@ -23,7 +23,7 @@ const OTPSchema = new mongoose.Schema({
   },
   purpose: {
     type: String,
-    enum: ['registration', 'login', 'forgot-password', 'admin_registration', 'admin_user_creation'],
+    enum: ['registration', 'login', 'forgot-password', 'admin_registration', 'admin_user_creation', 'resident_creation'],
     required: true
   },
   expiresAt: {
