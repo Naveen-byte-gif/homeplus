@@ -8,10 +8,17 @@ const rateLimit = require("express-rate-limit");
 const mongoSanitize = require("express-mongo-sanitize");
 const xss = require("xss-clean");
 const dotenv = require("dotenv");
+const path = require("path");
 
+const envFile =
+  process.env.NODE_ENV === "production"
+    ? ".env.production"
+    : ".env";
 // Load env vars
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, envFile) });
+console.log("🌍 ENV FILE LOADED:", envFile);
 console.log("Loaded ENV URI:", process.env.MONGODB_URI);
+console.log("Loaded BREVO KEY:", process.env.BREVO_API_KEY ? "YES" : "NO");
 
 // Import database connection
 const connectDB = require("./config/database");
