@@ -11,6 +11,30 @@ const path = require("path");
 const fs = require("fs");
 const dotenv = require("dotenv");
 
+// Detect git branch BEFORE loading env file
+function detectGitBranch() {
+  try {
+    const headPath = path.resolve(__dirname, ".git/HEAD");
+    const head = fs.readFileSync(headPath, "utf8").trim();
+    if (head.startsWith("ref:")) {
+      const ref = head.split(" ")[1].trim();
+      return ref.split("/").pop();
+    }
+    return head;
+  } catch (e) {
+    return process.env.GIT_BRANCH || null;
+  }
+}
+
+const gitBranch = detectGitBranch();
+console.log("🔀 [SERVER] Git branch detected:", gitBranch);
+
+// Set NODE_ENV based on git branch BEFORE loading env file
+if (gitBranch && gitBranch.toLowerCase().includes("prod")) {
+  process.env.NODE_ENV = "production";
+  // console.log("⚠️ [SERVER] NODE_ENV set to 'production' because branch is 'prod'");
+}
+
 const envPath =
   process.env.NODE_ENV === "production"
     ? path.resolve(__dirname, ".env.production")
@@ -224,41 +248,6 @@ process.on("SIGTERM", () => {
 });
 
 // Start server
-// const isProd = process.env.NODE_ENV === "production";
-
-// Detect git branch (fallback to GIT_BRANCH env if .git not available)
-function detectGitBranch() {
-  try {
-    const headPath = path.resolve(__dirname, ".git/HEAD");
-    const head = fs.readFileSync(headPath, "utf8").trim();
-    if (head.startsWith("ref:")) {
-      const ref = head.split(" ")[1].trim();
-      return ref.split("/").pop();
-    }
-    return head;
-  } catch (e) {
-    return process.env.GIT_BRANCH || null;
-  }
-}
-
-const gitBranch = detectGitBranch();
-console.log(" Git branch detected:", gitBranch);
-
-// If branch indicates production, ensure environment and port reflect that
-if (gitBranch && gitBranch.toLowerCase().includes("prod")) {
-  if (process.env.NODE_ENV !== "production") {
-    console.log(
-      "⚠️ [SERVER] Overriding NODE_ENV to 'production' because branch name includes 'prod'"
-    );
-    process.env.NODE_ENV = "production";
-  }
-  // Prefer branch-based production port unless an explicit different PORT was provided
-  if (!process.env.PORT || process.env.PORT === "6500") {
-    console.log("⚠️ [SERVER] Setting PORT to 6501 because branch is 'prod'");
-    process.env.PORT = "6501";
-  }
-}
-
 const isProd = process.env.NODE_ENV === "production";
 
 const PORT = process.env.PORT || (isProd ? 6501 : 6500);
