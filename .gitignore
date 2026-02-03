@@ -4,7 +4,7 @@
 .env
 .env.local
 .env.*.local
-
+.env.production
 # PM2 logs
 logs/
 *.log
