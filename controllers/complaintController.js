@@ -130,7 +130,8 @@ const getMyComplaints = async (req, res) => {
       })
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .lean();
 
     const total = await Complaint.countDocuments(filter);
 
@@ -1121,7 +1122,8 @@ const getAllTickets = async (req, res) => {
       .populate("assignedTo.assignedBy", "fullName role")
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .lean();
 
     const total = await Complaint.countDocuments(filter);
 

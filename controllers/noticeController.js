@@ -86,7 +86,8 @@ const getNotices = async (req, res) => {
       .populate('createdBy', 'fullName')
       .sort({ 'schedule.publishAt': -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .lean();
 
     const total = await Notice.countDocuments(filter);
 

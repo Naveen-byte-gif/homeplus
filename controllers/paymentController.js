@@ -26,7 +26,8 @@ exports.getMyInvoices = async (req, res) => {
     const invoices = await Invoice.find(query)
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
-      .skip(parseInt(skip));
+      .skip(parseInt(skip))
+      .lean();
 
     const total = await Invoice.countDocuments(query);
 
@@ -67,8 +68,18 @@ exports.getInvoiceById = async (req, res) => {
       });
     }
 
-    // Check access: Resident can only see their own invoices, Admin can see all
-    if (userRole !== 'admin' && invoice.flatId.toString() !== userId.toString()) {
+    // Check access: Resident/Owner own only; Admin all; Staff same apartment only
+    if (userRole === 'admin') {
+      // Admin can see all
+    } else if (userRole === 'staff') {
+      const staffApartment = req.user.apartmentCode;
+      if (!staffApartment || invoice.apartmentCode !== staffApartment) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied'
+        });
+      }
+    } else if (invoice.flatId.toString() !== userId.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Access denied'
@@ -102,8 +113,8 @@ exports.getInvoiceById = async (req, res) => {
 // @access  Private (Resident) or Public with phone validation
 exports.createPaymentByPhone = async (req, res) => {
   try {
-    const { phoneNumber, amount, paymentPurpose, description } = req.body;
-    const userId = req.user?._id; // Optional - can be public payment
+    const { phoneNumber, amount, paymentPurpose, description, invoiceId } = req.body;
+    const userId = req.user?._id;
 
     // Validate input
     if (!phoneNumber || !amount || !paymentPurpose) {
@@ -205,8 +216,7 @@ exports.createPaymentByPhone = async (req, res) => {
         metadata: {
           phoneNumber: phoneNumber,
           amount: amount,
-          paymentPurpose: paymentPurpose,
-          upiId: upiConfig.activeUpiId.upiId
+          paymentPurpose: paymentPurpose
         },
         request: {
           method: req.method,
@@ -220,8 +230,18 @@ exports.createPaymentByPhone = async (req, res) => {
       // Continue even if audit logging fails
     }
 
-    // Create payment record WITHOUT invoice (invoice will be generated after payment confirmation)
-    const payment = await Payment.create({
+    // If invoiceId provided, validate it belongs to this user (by flat)
+    let existingInvoice = null;
+    if (invoiceId) {
+      existingInvoice = await Invoice.findById(invoiceId);
+      if (existingInvoice && existingInvoice.flatId.toString() === user._id.toString()) {
+        // Link payment to this invoice; no new invoice will be generated on confirm
+      } else {
+        existingInvoice = null;
+      }
+    }
+
+    const paymentData = {
       phoneNumber: phoneNumber,
       flatId: user._id,
       apartmentCode: apartmentCode.toUpperCase(),
@@ -232,7 +252,12 @@ exports.createPaymentByPhone = async (req, res) => {
       status: 'pending_verification',
       paymentDate: new Date(),
       createdBy: userId || user._id
-    });
+    };
+    if (existingInvoice) {
+      paymentData.invoiceId = existingInvoice._id;
+      paymentData.invoiceNumber = existingInvoice.invoiceNumber;
+    }
+    const payment = await Payment.create(paymentData);
     
     // Update audit log with payment ID
     try {
@@ -256,10 +281,8 @@ exports.createPaymentByPhone = async (req, res) => {
       data: {
         payment,
         upiDeepLink,
-        upiId: upiConfig.activeUpiId.upiId,
-        accountHolderName: upiConfig.activeUpiId.accountHolderName,
         paymentNote,
-        message: 'Invoice will be generated after payment confirmation'
+        message: 'Pay via UPI app. Invoice will be generated after payment confirmation.'
       }
     });
   } catch (error) {
@@ -674,12 +697,13 @@ exports.confirmPayment = async (req, res) => {
   }
 };
 
-// @desc    Get all payments (admin)
+// @desc    Get all payments (admin / staff for own apartment)
 // @route   GET /api/payments
-// @access  Private (Admin)
+// @access  Private (Admin, Staff)
 exports.getAllPayments = async (req, res) => {
   try {
     const { status, apartmentCode, limit = 50, skip = 0 } = req.query;
+    const userRole = req.user.role;
 
     const query = {};
     if (status) {
@@ -688,6 +712,10 @@ exports.getAllPayments = async (req, res) => {
     if (apartmentCode) {
       query.apartmentCode = apartmentCode.toUpperCase();
     }
+    // Staff can only see payments for their apartment
+    if (userRole === 'staff' && req.user.apartmentCode) {
+      query.apartmentCode = req.user.apartmentCode.toUpperCase();
+    }
 
     const payments = await Payment.find(query)
       .populate('invoiceId', 'invoiceNumber totalPayable status')
@@ -695,7 +723,8 @@ exports.getAllPayments = async (req, res) => {
       .populate('verifiedBy', 'fullName')
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
-      .skip(parseInt(skip));
+      .skip(parseInt(skip))
+      .lean();
 
     const total = await Payment.countDocuments(query);
 

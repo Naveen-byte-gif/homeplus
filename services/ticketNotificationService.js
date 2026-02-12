@@ -522,13 +522,24 @@ const notifyStatusUpdate = async (complaint, oldStatus, newStatus, updatedBy, op
   }
 };
 
-// Send notification for comment added
+// Send notification for comment added (include full comment for immediate display)
 const notifyCommentAdded = async (complaint, comment, postedBy) => {
   try {
     const creator = await User.findById(complaint.createdBy);
     const commenter = await User.findById(postedBy);
 
     if (!creator || !commenter) return;
+
+    const commentPayload = comment.toObject ? comment.toObject() : {
+      _id: comment._id,
+      text: comment.text,
+      postedBy: comment.postedBy && typeof comment.postedBy === 'object'
+        ? { _id: comment.postedBy._id, fullName: comment.postedBy.fullName, role: comment.postedBy.role, profilePicture: comment.postedBy.profilePicture }
+        : { _id: postedBy, fullName: commenter.fullName, role: commenter.role, profilePicture: commenter.profilePicture },
+      postedAt: comment.postedAt,
+      media: comment.media || [],
+      isEdited: comment.isEdited || false,
+    };
 
     const notificationData = {
       type: 'ticket_comment_added',
@@ -537,6 +548,7 @@ const notifyCommentAdded = async (complaint, comment, postedBy) => {
       title: complaint.title,
       commentText: comment.text.substring(0, 100),
       postedBy: commenter.fullName,
+      comment: commentPayload,
     };
 
     // Notify ticket creator (if comment is not from them)

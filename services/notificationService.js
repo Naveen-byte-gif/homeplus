@@ -38,6 +38,7 @@ const sendUserNotification = async (userId, type, data) => {
     } catch (socketError) {
       console.error(
         `❌ [NOTIFICATION] Socket.IO error for user ${userId}:`,
+
         socketError,
       );
       // Continue even if socket fails
