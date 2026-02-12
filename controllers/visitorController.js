@@ -51,36 +51,42 @@ exports.getAllVisitors = async (req, res) => {
     // Calculate pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Get visitors
-    const visitors = await Visitor.find(query)
-      .populate("hostResident", "fullName phoneNumber wing flatNumber email")
-      .populate("createdBy", "fullName role email phoneNumber")
-      .populate("checkedInBy", "fullName role")
-      .populate("checkedOutBy", "fullName role")
-      .sort({ entryDate: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    // Get visitors (lean = plain objects, faster)
+    const [visitorsResult, total, statsResult] = await Promise.all([
+      Visitor.find(query)
+        .populate("hostResident", "fullName phoneNumber wing flatNumber email")
+        .populate("createdBy", "fullName role email phoneNumber")
+        .populate("checkedInBy", "fullName role")
+        .populate("checkedOutBy", "fullName role")
+        .sort({ entryDate: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Visitor.countDocuments(query),
+      Visitor.aggregate([
+        { $match: query },
+        {
+          $facet: {
+            pending: [{ $match: { status: "Pending" } }, { $count: "count" }],
+            checkedIn: [{ $match: { status: "Checked In" } }, { $count: "count" }],
+            checkedOut: [{ $match: { status: "Checked Out" } }, { $count: "count" }],
+            overdue: [
+              { $match: { status: "Checked In", expectedCheckOutTime: { $lt: new Date() } } },
+              { $count: "count" },
+            ],
+          },
+        },
+      ]),
+    ]);
 
-    // Get total count
-    const total = await Visitor.countDocuments(query);
-
-    // Calculate statistics
+    const visitors = visitorsResult;
+    const facet = statsResult[0] || {};
     const stats = {
-      total: total,
-      pending: await Visitor.countDocuments({ ...query, status: "Pending" }),
-      checkedIn: await Visitor.countDocuments({
-        ...query,
-        status: "Checked In",
-      }),
-      checkedOut: await Visitor.countDocuments({
-        ...query,
-        status: "Checked Out",
-      }),
-      overdue: await Visitor.countDocuments({
-        ...query,
-        status: "Checked In",
-        expectedCheckOutTime: { $lt: new Date() },
-      }),
+      total,
+      pending: facet.pending?.[0]?.count ?? 0,
+      checkedIn: facet.checkedIn?.[0]?.count ?? 0,
+      checkedOut: facet.checkedOut?.[0]?.count ?? 0,
+      overdue: facet.overdue?.[0]?.count ?? 0,
     };
 
     res.status(200).json({

@@ -11,20 +11,19 @@ const {
   getPaymentStats
 } = require('../controllers/paymentController');
 const { protect } = require('../middleware/auth');
-const { requireAdmin, authorize } = require('../middleware/roleCheck');
+const { requireAdmin, requireStaffOrAdmin, authorize } = require('../middleware/roleCheck');
 
 // All routes are protected
 router.use(protect);
 
-// Resident routes
+// Resident/Owner: pay by mobile number, view own invoices, confirm payment
 router.get('/invoices', authorize('resident', 'owner'), getMyInvoices);
-router.get('/invoices/:id', authorize('resident', 'owner', 'admin'), getInvoiceById);
-router.post('/create', authorize('resident', 'owner'), createPayment); // With invoice
-router.post('/create-by-phone', authorize('resident', 'owner'), createPaymentByPhone); // Phone-based, no invoice
+router.get('/invoices/:id', authorize('resident', 'owner', 'admin', 'staff'), getInvoiceById);
+router.post('/create-by-phone', authorize('resident', 'owner'), createPaymentByPhone);
 router.post('/:id/confirm', authorize('resident', 'owner'), confirmPayment);
 
-// Admin routes
-router.get('/', requireAdmin, getAllPayments);
+// Admin: all payments, verify, stats. Staff: list payments (own apartment only)
+router.get('/', requireStaffOrAdmin, getAllPayments);
 router.put('/:id/verify', requireAdmin, verifyPayment);
 router.get('/stats', requireAdmin, getPaymentStats);
 

@@ -364,7 +364,8 @@ const getAssignedComplaints = async (req, res) => {
       .populate('createdBy', 'fullName phoneNumber wing flatNumber profilePicture')
       .sort({ priority: -1, createdAt: 1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .lean();
 
     const total = await Complaint.countDocuments(filter);
 

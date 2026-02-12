@@ -128,7 +128,8 @@ exports.getAllInvoices = async (req, res) => {
       .populate('flatId', 'fullName flatNumber building')
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
-      .skip(parseInt(skip));
+      .skip(parseInt(skip))
+      .lean();
 
     const total = await Invoice.countDocuments(query);
 
